@@ -36,6 +36,14 @@ const PLATE_H: f32 = 32.0;
 const PAD: f32 = (SIZE.1 - PLATE_H) / 2.0;
 /// How long a notice stays beside the HUD.
 const NOTICE_VISIBLE: Duration = Duration::from_secs(6);
+/// Only a learned notice's Undo takes a click, and only macOS shows one.
+/// Elsewhere the plate passes every click through, which keeps Rune's
+/// XWayland fallback for it on GNOME.
+const INPUT: OverlayInput = if cfg!(target_os = "macos") {
+    OverlayInput::Regions
+} else {
+    OverlayInput::None
+};
 
 /// A one-line notice the plate shows for [`NOTICE_VISIBLE`].
 #[derive(Clone)]
@@ -240,9 +248,7 @@ pub(crate) fn install<S: 'static>(app: &mut rune::App<S>, place: Place) {
         view,
     }
     .options(OverlayOptions {
-        // Only a learned notice's Undo takes a click; the words pass
-        // every click through.
-        input: OverlayInput::Regions,
+        input: INPUT,
         prewarm: cfg!(target_os = "macos")
             || crate::labs::live_text()
             || crate::labs::failure_notices(),
@@ -349,7 +355,8 @@ pub(crate) fn dismiss_failure() {
     dismiss_notice(Notice::is_failure);
 }
 
-/// Hides a learned notice when Labs › Learn from corrections is turned off.
+/// Hides a learned notice when Labs › Learn from corrections is turned off,
+/// from any settings surface.
 pub(crate) fn dismiss_learned() {
     dismiss_notice(|notice| !notice.is_failure());
 }
@@ -529,13 +536,16 @@ fn learned_line(p: &Paint, learned: &Learned) -> El {
         .child(undo)
 }
 
-/// Runs the learned notice's Undo once, and the notice leaves.
+/// Runs the learned notice's Undo once, unless its lab was turned off
+/// since, and the notice leaves.
 fn undo_pressed(plate: &mut Plate) {
     let Some(Notice::Learned(learned, undo)) = plate.notice.take() else {
         return;
     };
     notice().dismiss(|notice| !notice.is_failure());
-    undo(&learned);
+    if crate::labs::learn_from_corrections() {
+        undo(&learned);
+    }
     if plate.should_hide() && plate.shown {
         if let Some(overlay) = LIVE.get() {
             overlay.fade_out(FADE);
@@ -892,9 +902,18 @@ mod tests {
         assert!(rect(&rt, "learned").is_none());
     }
 
+    fn lab(on: bool) {
+        crate::labs::apply(&crate::app_settings::LabsSettings {
+            learn_from_corrections: on,
+            ..Default::default()
+        });
+    }
+
     #[test]
+    #[cfg(target_os = "macos")]
     fn undo_runs_once_and_the_notice_leaves() {
         static UNDONE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        lab(true);
         let terms = ["Raunak".to_string()];
         let mut plate = Plate {
             notice: Some(Notice::Learned(
@@ -908,9 +927,37 @@ mod tests {
         };
         undo_pressed(&mut plate);
         undo_pressed(&mut plate);
+        lab(false);
         assert_eq!(UNDONE.load(Ordering::SeqCst), 1);
         assert!(plate.notice.is_none());
         assert!(plate.should_hide());
+    }
+
+    #[test]
+    fn undo_does_nothing_once_its_lab_is_off() {
+        lab(false);
+        let mut plate = Plate {
+            notice: Some(Notice::Learned(
+                crate::dictation::corrections::add_learned(&mut Vec::new(), &["Raunak".into()]),
+                |_| panic!("Undo ran with its lab off"),
+            )),
+            ..Plate::default()
+        };
+        undo_pressed(&mut plate);
+        assert!(plate.notice.is_none(), "the notice still leaves");
+    }
+
+    #[test]
+    fn turning_the_lab_off_anywhere_dismisses_a_learned_notice() {
+        notice().show(learned(&["Raunak"]), Instant::now());
+        // As `hex settings set labs.learn_from_corrections false` saves it.
+        lab(false);
+        assert!(notice().message.is_none());
+    }
+
+    #[test]
+    fn off_macos_the_plate_passes_every_click_through() {
+        assert_eq!(INPUT == OverlayInput::Regions, cfg!(target_os = "macos"));
     }
 
     #[test]

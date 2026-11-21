@@ -1031,7 +1031,6 @@ fn flip(ui: &mut Ui, lab: Lab) {
         }
         // A notice already on screen leaves with its lab.
         Feature::FailureNotices if !on => crate::rune_ui::live_text::dismiss_failure(),
-        Feature::LearnFromCorrections if !on => crate::rune_ui::live_text::dismiss_learned(),
         // Hex hears the browser through System Audio Recording.
         Feature::PauseBrowser if on && !ui.platform.system_audio => {
             ui.ask(super::platform::PlatformRequest::SystemAudio);

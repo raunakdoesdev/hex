@@ -874,6 +874,11 @@ pub(crate) fn apply(settings: &LabsSettings) {
     store_api_browser_access(settings);
     store_voice_prompt_phrase(&settings.voice_prompt_phrase);
     store_stop_phrase_text(&settings.stop_phrase_text);
+    // Every save and reload lands here, so a learned notice leaves with its
+    // lab however the lab was turned off (the card, `hex settings set`).
+    if !learn_from_corrections() {
+        crate::rune_ui::live_text::dismiss_learned();
+    }
     // Labs › Pause from menu bar: turning it off resumes at once, without
     // waiting for the menu to refresh; the menu row hides itself there.
     crate::shortcut_pause::reconcile(pause_menu());
