@@ -200,6 +200,7 @@ impl Feature {
             Self::ModesEditor => settings.labs.modes_editor,
             Self::PasteLastPicker => settings.labs.paste_last_picker,
             Self::VocabularyFiles => settings.labs.vocabulary_files,
+            Self::LearnFromCorrections => settings.labs.learn_from_corrections,
         }
     }
 
@@ -291,6 +292,7 @@ impl Feature {
             &mut labs.modes_editor,
             &mut labs.paste_last_picker,
             &mut labs.vocabulary_files,
+            &mut labs.learn_from_corrections,
         ]
     }
 
@@ -388,6 +390,7 @@ impl Feature {
             Self::ModesEditor => settings.labs.modes_editor = on,
             Self::PasteLastPicker => settings.labs.paste_last_picker = on,
             Self::VocabularyFiles => settings.labs.vocabulary_files = on,
+            Self::LearnFromCorrections => settings.labs.learn_from_corrections = on,
             // Off, no shortcut keeps a key only the feature allows.
             Self::StandaloneSpecialKeys => {
                 settings.labs.standalone_special_keys = on;
@@ -524,6 +527,10 @@ static SCREEN_VOCABULARY: AtomicBool = AtomicBool::new(false);
 /// once per dictation, and the state word has no bit for it.
 static CURSOR_CONTEXT: AtomicBool = AtomicBool::new(false);
 
+/// Labs › Learn from corrections' switch, set beside [`STATE`] like
+/// [`CURSOR_CONTEXT`]: the state word has no bit for it.
+static LEARN_FROM_CORRECTIONS: AtomicBool = AtomicBool::new(false);
+
 /// Labs › Rewrite by voice's switch in its own atomic, written by [`state`] and
 /// [`apply`].
 static VOICE_PROMPT: AtomicBool = AtomicBool::new(false);
@@ -619,6 +626,8 @@ fn state() -> u64 {
                 PRINT_START.store(print_start_enabled(&saved), Ordering::Release);
                 SCREEN_VOCABULARY.store(screen_vocabulary_enabled(&saved), Ordering::Release);
                 CURSOR_CONTEXT.store(cursor_context_enabled(&saved), Ordering::Release);
+                LEARN_FROM_CORRECTIONS
+                    .store(learn_from_corrections_enabled(&saved), Ordering::Release);
                 VOICE_PROMPT.store(voice_prompt_enabled(&saved), Ordering::Release);
                 STOP_PHRASE.store(stop_phrase_enabled(&saved), Ordering::Release);
                 COPY_CAPTURE_ZIP.store(copy_capture_zip_enabled(&saved), Ordering::Release);
@@ -668,6 +677,14 @@ fn cursor_context_enabled(settings: &LabsSettings) -> bool {
     settings.cursor_context
         && Feature::CursorContext.shipped()
         && Feature::CursorContext.managed().is_none()
+}
+
+/// Whether `settings` turn on Labs › Learn from corrections in this build,
+/// before its managed lock; the state word has no bit for it.
+fn learn_from_corrections_enabled(settings: &LabsSettings) -> bool {
+    settings.learn_from_corrections
+        && Feature::LearnFromCorrections.shipped()
+        && Feature::LearnFromCorrections.managed().is_none()
 }
 
 /// Whether `settings` turn on Labs › Rewrite by voice in this build, before its
@@ -841,6 +858,7 @@ pub(crate) fn apply(settings: &LabsSettings) {
     PRINT_START.store(print_start_enabled(settings), Ordering::Release);
     SCREEN_VOCABULARY.store(screen_vocabulary_enabled(settings), Ordering::Release);
     CURSOR_CONTEXT.store(cursor_context_enabled(settings), Ordering::Release);
+    LEARN_FROM_CORRECTIONS.store(learn_from_corrections_enabled(settings), Ordering::Release);
     VOICE_PROMPT.store(voice_prompt_enabled(settings), Ordering::Release);
     STOP_PHRASE.store(stop_phrase_enabled(settings), Ordering::Release);
     COPY_CAPTURE_ZIP.store(copy_capture_zip_enabled(settings), Ordering::Release);
@@ -1065,6 +1083,7 @@ pub fn log_launch() {
         vocabulary_biasing = vocabulary_biasing(),
         screen_vocabulary = screen_vocabulary(),
         cursor_context = cursor_context(),
+        learn_from_corrections = learn_from_corrections(),
         copy_dictation_audio = copy_dictation_audio(),
         hold_through_keys = hold_through_keys(),
         "labs"
@@ -1937,6 +1956,30 @@ mod tests {
         assert_eq!(Feature::CursorContext.group(), Group::Output);
         assert_eq!(Feature::CursorContext.settings_key(), "labs.cursor_context");
         assert_eq!(Feature::CursorContext.name(), "cursor-context");
+    }
+
+    #[test]
+    fn learn_from_corrections_is_its_own_switch_and_macos_only() {
+        let mut labs = LabsSettings::default();
+        assert!(!learn_from_corrections_enabled(&labs));
+        labs.learn_from_corrections = true;
+        labs.unload_idle_minutes = 24 * 60;
+        assert!(learn_from_corrections_enabled(&labs));
+        // The state word has no bit for it: the other switches keep theirs.
+        let state = encode_where(&labs, |_| true);
+        assert_eq!(state & SMART_SPACING, 0);
+        assert_eq!((state >> MINUTES_SHIFT) & MINUTES_MASK, 24 * 60);
+        let feature = Feature::LearnFromCorrections;
+        assert_eq!(feature.on_this_os(), cfg!(target_os = "macos"));
+        assert_eq!(feature.added(), 20261120);
+        assert_eq!(feature.audience(), Audience::Everyone);
+        assert_eq!(feature.group(), Group::Dictation);
+        assert_eq!(feature.settings_key(), "labs.learn_from_corrections");
+        assert_eq!(feature.name(), "learn-from-corrections");
+        assert_eq!(
+            Feature::for_settings_key("labs.learn_from_corrections"),
+            Some(feature)
+        );
     }
 
     #[test]

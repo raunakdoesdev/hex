@@ -93,7 +93,8 @@ impl Feature {
             | Self::StopPhrase
             | Self::HoldThroughKeys
             | Self::ModesEditor
-            | Self::VocabularyFiles => Audience::Everyone,
+            | Self::VocabularyFiles
+            | Self::LearnFromCorrections => Audience::Everyone,
         }
     }
 
@@ -173,7 +174,8 @@ impl Feature {
             Self::NeutralVoice
             | Self::AnnotatePointerScreen
             | Self::FasterLiveText
-            | Self::VocabularyFiles => 20261120,
+            | Self::VocabularyFiles
+            | Self::LearnFromCorrections => 20261120,
         }
     }
 
@@ -282,6 +284,7 @@ impl Feature {
             | Self::PrintStart
             | Self::ScreenVocabulary
             | Self::CursorContext
+            | Self::LearnFromCorrections
             | Self::MoreDictationShortcuts
             | Self::CalendarMenu
             | Self::CalendarSelectAll
@@ -421,6 +424,7 @@ impl Feature {
             Self::ModesEditor => "modes-editor",
             Self::PasteLastPicker => "paste-last-picker",
             Self::VocabularyFiles => "vocabulary-files",
+            Self::LearnFromCorrections => "learn-from-corrections",
         }
     }
 
@@ -510,6 +514,7 @@ impl Feature {
             Self::HoldThroughKeys => "labs.hold_through_keys",
             Self::ModesEditor => "labs.modes_editor",
             Self::VocabularyFiles => "labs.vocabulary_files",
+            Self::LearnFromCorrections => "labs.learn_from_corrections",
         }
     }
 

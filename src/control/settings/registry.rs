@@ -333,6 +333,11 @@ pub(super) const KEYS: &[Key] = &[
         "Labs: use names and terms visible in the focused window as temporary vocabulary for each dictation (macOS)",
     ),
     key(
+        "labs.learn_from_corrections",
+        Kind::Bool,
+        "Labs: names and terms you type over a dictation's text right after it lands join the vocabulary (macOS); read locally through Accessibility, password fields skipped",
+    ),
+    key(
         "labs.cursor_context",
         Kind::Bool,
         "Labs: the mode's OpenCode rewrite reads the text around the cursor, so names and terms match where the result lands (macOS); password fields are never read",

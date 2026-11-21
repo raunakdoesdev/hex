@@ -590,6 +590,7 @@ fn rows(ui: &Ui) -> Vec<Row> {
     // becomes real.
     if caps.os == super::platform::Os::Macos {
         rows.push(row(Feature::ScreenVocabulary, Some(&BOOK)));
+        rows.push(row(Feature::LearnFromCorrections, Some(&BOOK)));
     }
     if caps.keyboard_model_switching {
         rows.push(row(Feature::KeyboardModelSwitching, Some(&KEYBOARD)));
@@ -969,6 +970,7 @@ fn row_key(lab: Lab) -> &'static str {
         Feature::ModesEditor => "lab-modes-editor",
         Feature::DropTranscribe => "lab-drop-transcribe",
         Feature::VocabularyFiles => "lab-vocabulary-files",
+        Feature::LearnFromCorrections => "lab-learn-from-corrections",
     }
 }
 

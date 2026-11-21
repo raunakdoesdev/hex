@@ -241,6 +241,9 @@ impl Feature {
             Self::VocabularyFiles => {
                 "Import terms from a CSV file into the vocabulary sheet, merging them into the list, and export the list as a CSV file"
             }
+            Self::LearnFromCorrections => {
+                "Names and terms you type over a dictation's text right after it lands join the Vocabulary. Read locally through Accessibility; password fields skipped"
+            }
         }
     }
 }

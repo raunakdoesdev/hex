@@ -2268,6 +2268,10 @@ fn labs_lists_every_toggle_off_by_default() {
         ("lab-vocabulary-files", settings.labs.vocabulary_files),
         ("lab-screen-vocabulary", settings.labs.screen_vocabulary),
         ("lab-cursor-context", settings.labs.cursor_context),
+        (
+            "lab-learn-from-corrections",
+            settings.labs.learn_from_corrections,
+        ),
         ("lab-return-to-app", settings.labs.return_to_app),
         ("lab-speakers-only", settings.labs.speakers_only),
         (
@@ -2294,6 +2298,8 @@ fn labs_lists_every_toggle_off_by_default() {
     assert!(rt.state.settings.labs.vocabulary_files);
     tap(&mut rt, "lab-cursor-context");
     assert!(rt.state.settings.labs.cursor_context);
+    tap(&mut rt, "lab-learn-from-corrections");
+    assert!(rt.state.settings.labs.learn_from_corrections);
     tap(&mut rt, "lab-meetings");
     assert!(rt.find("nav-meetings").is_none(), "hidden while off");
 
@@ -2305,6 +2311,10 @@ fn labs_lists_every_toggle_off_by_default() {
     assert!(rt.find("lab-return-to-app").is_none(), "macOS only");
     assert!(rt.find("lab-screen-vocabulary").is_none(), "macOS only");
     assert!(rt.find("lab-cursor-context").is_none(), "macOS only");
+    assert!(
+        rt.find("lab-learn-from-corrections").is_none(),
+        "macOS only"
+    );
     assert!(
         rt.find("lab-second-dictation-shortcut").is_some(),
         "the second dictation shortcut runs on Windows too"
