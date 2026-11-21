@@ -300,27 +300,30 @@ fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
     // A name typed over dictated words can take more words than it replaced
     // ("ronak" -> "Raunak Chowdhuri"): up to a phrase's length, the extra
     // words are the name, not more edits. Past an open end, a name typed
-    // over the last word runs on past where the dictation stopped.
+    // over the last word runs on past where the dictation stopped. Any
+    // name-shaped word starts the run, but only words that can be learned
+    // take a phrase's places: a sentence's first word or one the dictation
+    // had ("Thanks. Raunak Chowdhuri") brings its surname along without
+    // using one up.
     let mut forgiven = 0;
     let mut phrase = NamePhrase::default();
     for index in 0..after.len() {
-        let name = is_name(after, index, before);
-        let continues = phrase.words > 0
+        let continues = phrase.replaced + phrase.inserted > 0
             && phrase.words < MAX_PHRASE_WORDS
             && joined(&after[index - 1], &after[index])
-            && name;
+            && looks_like_name(after[index].bare);
         if index >= end {
             if !(open.end && continues && phrase.replaced > 0) {
                 break;
             }
             changed[index] = true;
             phrase.words += 1;
-        } else if changed[index] && name {
+        } else if changed[index] && looks_like_name(after[index].bare) {
             if !continues {
                 forgiven += phrase.forgiven();
                 phrase = NamePhrase::default();
             }
-            phrase.words += 1;
+            phrase.words += usize::from(is_name(after, index, before));
             if replaced[index] {
                 phrase.replaced += 1;
             } else {
@@ -354,8 +357,8 @@ fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
     }
 }
 
-/// Adjacent changed name-shaped words in the edited text, and how many of
-/// them replaced a dictated word or were inserted.
+/// Adjacent changed name-shaped words in the edited text: how many of them
+/// can be learned, and how many replaced a dictated word or were inserted.
 #[derive(Default)]
 struct NamePhrase {
     words: usize,
@@ -778,6 +781,28 @@ mod tests {
                 "Notes: I booked the room. Ask Jean Luc Picard"
             ),
             ["Jean Luc Picard"]
+        );
+    }
+
+    #[test]
+    fn a_name_that_cannot_be_learned_still_brings_its_surname() {
+        assert_eq!(
+            learned_in_field(
+                "Thanks for your help. ronak",
+                "Thanks for your help. ronak",
+                "Thanks for your help. Raunak Chowdhuri"
+            ),
+            ["Chowdhuri"],
+            "a sentence's first word"
+        );
+        assert_eq!(
+            learned_in_field(
+                "Notes: John called jon",
+                "John called jon",
+                "Notes: John called John Smythe"
+            ),
+            ["Smythe"],
+            "a word the dictation had"
         );
     }
 
