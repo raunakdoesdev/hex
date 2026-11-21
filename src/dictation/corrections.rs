@@ -257,6 +257,25 @@ fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
             i -= 1;
         }
     }
+    // A name typed over the dictation's last word can run on past where it
+    // stopped ("ronak" -> "Raunak Chowdhuri"): its unbroken name-shaped
+    // words belong to the correction, up to a phrase's length.
+    let mut extra = 0;
+    while open.end
+        && end + extra < after.len()
+        && end + extra > 0
+        && changed[end + extra - 1]
+        && extra + 1 < MAX_PHRASE_WORDS
+        && after[end + extra - 1]
+            .raw
+            .ends_with(after[end + extra - 1].bare)
+        && !after[end + extra].after_mark
+        && after[end + extra].raw.starts_with(after[end + extra].bare)
+        && looks_like_name(after[end + extra].bare)
+    {
+        changed[end + extra] = true;
+        extra += 1;
+    }
     let mut added = Vec::new();
     let mut start = None;
     for (index, &is_changed) in changed.iter().chain([&false]).enumerate() {
@@ -269,10 +288,10 @@ fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
             _ => {}
         }
     }
-    let longest = before.len().max(end - j).max(1);
+    let longest = before.len().max(end + extra - j).max(1);
     Diff {
         added,
-        distance: cost[last + end] as f32 / longest as f32,
+        distance: (cost[last + end] + extra) as f32 / longest as f32,
     }
 }
 
@@ -587,6 +606,24 @@ mod tests {
             ),
             ["Raunak"],
             "the correction counts, the sentence typed after it doesn't"
+        );
+        assert_eq!(
+            learned_in_field(
+                field,
+                "send the deck to ronak",
+                "Hi team, send the deck to Raunak Chowdhuri"
+            ),
+            ["Raunak Chowdhuri"],
+            "a full name typed over the last word"
+        );
+        assert_eq!(
+            learned_in_field(
+                field,
+                "send the deck to ronak",
+                "Hi team, send the deck to Raunak Chowdhuri. Priya agreed."
+            ),
+            ["Raunak Chowdhuri"],
+            "and drafting typed after that full name"
         );
     }
 

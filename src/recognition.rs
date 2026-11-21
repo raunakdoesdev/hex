@@ -429,6 +429,13 @@ pub fn listen(
                         }
                         let id = next_programmatic_id;
                         next_programmatic_id = next_programmatic_id.wrapping_add(1).max(1);
+                        // Labs › Learn from corrections: an API capture is
+                        // real at once, so it hears and ends the watch.
+                        #[cfg(target_os = "macos")]
+                        {
+                            crate::dictation::corrections::watch::dictation_pressed();
+                            crate::dictation::corrections::watch::capture_intended();
+                        }
                         let boundary = capture_boundary(&input, release.press);
                         match input.start_programmatic(boundary) {
                             Ok(()) => {

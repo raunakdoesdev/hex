@@ -551,15 +551,20 @@ text before and after it is the anchor. The watch then reads the whole value
 Return or keypad Enter (seen by the input monitor, or pressed by YOLO mode
 through `PasteMode::Return`), its app leaving the front, focus moving to
 another element, the element disappearing or emptying, a newer insertion,
-the next dictation's press, or the lab turning off. It learns from the last
+the next capture becoming real (`ContextWatch::intend`: a hold past its
+threshold, a control start, a released microphone opening, or a local API
+start), or the lab turning off. Each of these is checked again after every
+read, so a read that began after one is discarded. It learns from the last
 read taken before any of those, so a message sent with Return, or a newer
 paste, never reads as the user's edit; a lab turned off saves nothing.
 
 Each read that changes the text is compared at once, and its terms wait for
-the next dictation: that press (`recognition::capture_actions`, before audio
-starts) adds them to the in-memory vocabulary, so the capture hears them,
-with no Accessibility read or settings write on that path; the watch saves
-them on its own thread.
+the next dictation. That shortcut's press (`recognition::capture_actions`,
+before audio starts) adds them to the in-memory vocabulary, so the capture's
+stream hears them, with no Accessibility read or settings write on that path.
+The press does not end the watch, because it may be a chord such as
+Option–Left on the way to the word being fixed. The watch ends once the
+capture is real, and saves the terms on its own thread.
 
 ```ts
 Watch ends
@@ -579,6 +584,9 @@ Watch ends
 A side of the dictation with only whitespace next to it (a paste at the end
 or start of the field) is open: words typed on past it are drafting, not a
 correction, and never count, while a corrected last or first word still does.
+A name typed over the last word may run on past it ("ronak" -> "Raunak
+Chowdhuri"): up to a phrase's length of unbroken name-shaped words after a
+changed last word belong to the correction.
 
 Learned terms are added with `vocabulary::add` inside `AppSettings::edit`,
 which applies them to the vocabulary as saved at that moment under the
@@ -594,7 +602,8 @@ and digits, sentence-start capitals, reordered words, deletions, a rewrite,
 the word limit, dedupe against the vocabulary and within an edit, the anchor
 by caret and by a single match, open ends, the edited region),
 `dictation::corrections::watch::tests` (a scripted field: saving at the end,
-leaving the app, the lab turning off, YOLO's Return, the next dictation),
+leaving the app, the lab turning off, YOLO's Return, the next dictation, a
+chord press that keeps the watch),
 `a_learned_vocabulary_edit_keeps_vocabulary_edits_saved_since_learning_began`
 in `app_settings::persistence::tests`, and
 `learn_from_corrections_is_its_own_switch_and_macos_only` in

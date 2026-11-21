@@ -21,7 +21,7 @@ pub(super) fn handle_hotkey_action(
             // watched joins the vocabulary before this capture's stream
             // fixes it, without Accessibility or settings I/O here.
             #[cfg(target_os = "macos")]
-            crate::dictation::corrections::watch::dictation_started();
+            crate::dictation::corrections::watch::dictation_pressed();
             if !dictation.start(action_at)? {
                 return Ok(false);
             }

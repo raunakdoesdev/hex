@@ -3,7 +3,7 @@
 //!
 //! The watch ends at Return (typed, or pressed by YOLO mode), the app or the
 //! field losing focus, a field that disappears or is emptied, a newer
-//! insertion, the next dictation starting, the lab turning off, or five
+//! insertion, the next capture becoming real, the lab turning off, or five
 //! minutes. It learns from the last read of the field taken before any of
 //! those, so a message sent with Return or a newer dictation pasted on top
 //! never counts as the user's edit, and a lab turned off saves nothing.
@@ -27,7 +27,7 @@ const LONGEST_WATCH: Duration = Duration::from_secs(5 * 60);
 const ARRIVAL: Duration = Duration::from_secs(2);
 
 /// Bumped by everything that ends a watch: an insertion starting, Return,
-/// and a dictation starting.
+/// and a capture becoming real.
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 /// What the running watch's last read teaches, for a dictation that starts
 /// before the watch has saved it.
@@ -69,17 +69,17 @@ pub(crate) fn note_return() {
     end();
 }
 
-/// A dictation is starting: the watch ends, and the terms its last read
-/// already taught join the vocabulary in memory, so this capture hears
-/// them. The watch saves them on its own thread; nothing here reads
-/// Accessibility or settings.
-pub(crate) fn dictation_started() {
+/// A dictation's shortcut went down, before its audio starts: the terms the
+/// watch's last read already taught join the vocabulary in memory, so this
+/// capture's stream hears them. The watch keeps going, since the press may
+/// be a chord such as Option–Left on the way to the word being fixed; it
+/// ends at [`capture_intended`]. Nothing here reads Accessibility or
+/// settings.
+pub(crate) fn dictation_pressed() {
     let terms = {
-        let mut pending = PENDING.lock().unwrap_or_else(|error| error.into_inner());
-        let running = pending.epoch == EPOCH.load(Ordering::Acquire);
-        end();
-        if running {
-            std::mem::take(&mut pending.terms)
+        let pending = PENDING.lock().unwrap_or_else(|error| error.into_inner());
+        if pending.epoch == EPOCH.load(Ordering::Acquire) {
+            pending.terms.clone()
         } else {
             Vec::new()
         }
@@ -87,6 +87,14 @@ pub(crate) fn dictation_started() {
     if !terms.is_empty() && crate::labs::learn_from_corrections() {
         vocabulary::add_unsaved(&terms);
     }
+}
+
+/// The capture is real (a hold past its threshold, a control or API start,
+/// or a released microphone opening): the watch ends and saves what its
+/// last read taught on its own thread.
+pub(crate) fn capture_intended() {
+    let _pending = PENDING.lock().unwrap_or_else(|error| error.into_inner());
+    end();
 }
 
 /// Holds `terms` for a dictation that starts next, unless the watch of
@@ -164,15 +172,17 @@ fn follow(epoch: u64, field: &impl Field, inserted: &str, save: impl FnOnce(&[St
         }
         thread::sleep(POLL);
     };
+    let watching = || current() && field.in_front() && field.has_focus();
     let mut outcome = Outcome::Unchanged;
-    while started.elapsed() < LONGEST_WATCH && current() && field.in_front() && field.has_focus() {
+    while started.elapsed() < LONGEST_WATCH && watching() {
         thread::sleep(POLL);
         let Some(text) = field.text().filter(|text| !text.trim().is_empty()) else {
             break;
         };
         // Read before checking: a read that started after a newer paste, a
-        // Return, or a dictation's start could already hold what they did.
-        if !current() {
+        // Return, a capture, or a switch to another app could already hold
+        // what they did.
+        if !watching() {
             break;
         }
         if text != last {
@@ -319,11 +329,14 @@ mod tests {
         lab(true);
         let saved = saved(|read, front| match read {
             1 => Some(FIELD.into()),
-            2 => {
+            2 => Some(CORRECTED.into()),
+            // The switch lands between the check before this read and the
+            // read itself.
+            3 => {
                 front.set(false);
-                Some(CORRECTED.into())
+                Some(ELSEWHERE.into())
             }
-            3 => Some(ELSEWHERE.into()),
+            4 => panic!("the field is read after its app left the front"),
             _ => None,
         });
         assert_eq!(saved, Some(vec!["Raunak".into()]));
@@ -374,19 +387,38 @@ mod tests {
             1 => Some(FIELD.into()),
             2 => Some(CORRECTED.into()),
             3 => {
-                dictation_started();
+                dictation_pressed();
                 heard = vocabulary::terms();
+                capture_intended();
                 Some(ELSEWHERE.into())
             }
+            4 => panic!("the field is read after the capture became real"),
             _ => None,
         });
         vocabulary::apply(&[], vocabulary::VocabularyBoost::Normal);
-        assert_eq!(heard, ["Raunak"], "in memory as the dictation starts");
+        assert_eq!(heard, ["Raunak"], "in memory as the shortcut goes down");
         assert_eq!(saved, Some(vec!["Raunak".into()]));
-        dictation_started();
+        dictation_pressed();
         assert!(
             vocabulary::terms().is_empty(),
             "a finished watch hands nothing on"
         );
+    }
+
+    #[test]
+    fn a_press_that_never_becomes_a_capture_keeps_the_watch() {
+        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        lab(true);
+        // Option–Left on the way to the misspelling: the press is a chord.
+        let saved = saved(|read, _| match read {
+            1 => Some(FIELD.into()),
+            2 => {
+                dictation_pressed();
+                Some(FIELD.into())
+            }
+            3 => Some(CORRECTED.into()),
+            _ => None,
+        });
+        assert_eq!(saved, Some(vec!["Raunak".into()]));
     }
 }
