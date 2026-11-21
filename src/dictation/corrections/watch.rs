@@ -246,8 +246,8 @@ fn save(terms: &[String]) {
 }
 
 /// The notice's Undo: takes `learned` back out of the vocabulary as saved
-/// right now, under the same lock as its save, leaving any entry edited or
-/// removed since.
+/// right now, under the same lock as its save, unless the vocabulary has
+/// changed since.
 fn undo(learned: &Learned) {
     let mut removed = 0;
     match AppSettings::edit(|settings| {

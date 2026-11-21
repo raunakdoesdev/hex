@@ -71,9 +71,6 @@ pub(crate) fn learn(
         .iter()
         .flat_map(|run| candidates(&after, run.clone(), &before))
     {
-        if terms.len() == MAX_TERMS {
-            break;
-        }
         if term.chars().count() <= vocabulary::MAX_TERM_CHARS
             && !vocabulary::contains(vocabulary, &term)
             && !terms.iter().any(|kept| vocabulary::same(kept, &term))
@@ -84,46 +81,54 @@ pub(crate) fn learn(
     Outcome::Learned(terms)
 }
 
-/// The entries one correction added, as it added them, for its Undo.
+/// The entries one correction added, for its Undo, and the whole
+/// vocabulary as that left it.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Learned(Vec<VocabularyEntry>);
+pub(crate) struct Learned {
+    added: Vec<VocabularyEntry>,
+    saved: Vec<VocabularyEntry>,
+}
 
 impl Learned {
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.added.is_empty()
     }
 
     pub(crate) fn terms(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.0.iter().map(|entry| entry.term.as_str())
+        self.added.iter().map(|entry| entry.term.as_str())
     }
 
-    /// Takes these entries back out of `vocabulary` where it still holds
-    /// them exactly as added; one the user has since changed or removed is
-    /// left as they left it. Returns how many it removed.
+    /// Takes these entries back out of `vocabulary` if it is still exactly
+    /// as this correction left it; any change since, even a term removed
+    /// and added again, means the user has taken it over, and nothing is
+    /// removed. Returns how many it removed.
     pub(crate) fn undo(&self, vocabulary: &mut Vec<VocabularyEntry>) -> usize {
-        let before = vocabulary.len();
-        for added in &self.0 {
-            if let Some(index) = vocabulary.iter().position(|entry| entry == added) {
-                vocabulary.remove(index);
-            }
+        if *vocabulary != self.saved {
+            return 0;
         }
-        before - vocabulary.len()
+        vocabulary.retain(|entry| !self.added.contains(entry));
+        self.added.len()
     }
 }
 
-/// Adds learned `terms` to `vocabulary`, skipping any it has in any case
-/// and any past its 500-entry cap. Returns what it added.
+/// Adds up to [`MAX_TERMS`] of the learned `terms` to `vocabulary`,
+/// skipping any it has in any case and any past its 500-entry cap, so a
+/// term the user added meanwhile doesn't take a learned one's place.
+/// Returns what it added.
 pub(crate) fn add_learned(vocabulary: &mut Vec<VocabularyEntry>, terms: &[String]) -> Learned {
-    Learned(
-        terms
-            .iter()
-            .filter_map(|term| {
-                (vocabulary::add(vocabulary, term, &[]) == Ok(true))
-                    .then(|| vocabulary.last().cloned())
-                    .flatten()
-            })
-            .collect(),
-    )
+    let added = terms
+        .iter()
+        .filter_map(|term| {
+            (vocabulary::add(vocabulary, term, &[]) == Ok(true))
+                .then(|| vocabulary.last().cloned())
+                .flatten()
+        })
+        .take(MAX_TERMS)
+        .collect();
+    Learned {
+        added,
+        saved: vocabulary.clone(),
+    }
 }
 
 /// Where a dictation landed in a field: the field's text before and after
@@ -297,22 +302,20 @@ fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
     // words are the name, not more edits. Past an open end, a name typed
     // over the last word runs on past where the dictation stopped.
     let mut forgiven = 0;
-    let mut extra = 0;
     let mut phrase = NamePhrase::default();
     for index in 0..after.len() {
-        let word = &after[index];
+        let name = is_name(after, index, before);
         let continues = phrase.words > 0
             && phrase.words < MAX_PHRASE_WORDS
-            && joined(&after[index - 1], word)
-            && looks_like_name(word.bare);
+            && joined(&after[index - 1], &after[index])
+            && name;
         if index >= end {
             if !(open.end && continues && phrase.replaced > 0) {
                 break;
             }
             changed[index] = true;
-            extra += 1;
             phrase.words += 1;
-        } else if changed[index] && looks_like_name(word.bare) {
+        } else if changed[index] && name {
             if !continues {
                 forgiven += phrase.forgiven();
                 phrase = NamePhrase::default();
@@ -341,7 +344,10 @@ fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
             _ => {}
         }
     }
-    let longest = before.len().max(end + extra - j).max(1);
+    // Neither a name's run past an open end nor the words it took on count
+    // as words the edit could have changed, or a rewrite ending in a long
+    // name would pass for a correction.
+    let longest = before.len().max(end - j - forgiven).max(1);
     Diff {
         added,
         distance: (cost[last + end] - forgiven) as f32 / longest as f32,
@@ -384,11 +390,7 @@ fn candidates(after: &[Word], run: std::ops::Range<usize>, before: &[Word]) -> V
     };
     for index in run {
         let word = &after[index];
-        let starts_sentence = index == 0 || ends_sentence(after[index - 1].raw);
-        let typed_in = !before.iter().any(|kept| kept.bare == word.bare);
-        let name = typed_in
-            && looks_like_name(word.bare)
-            && !(starts_sentence && is_capitalized(word.bare));
+        let name = is_name(after, index, before);
         if !name
             || phrase.len() == MAX_PHRASE_WORDS
             || word.after_mark
@@ -405,6 +407,16 @@ fn candidates(after: &[Word], run: std::ops::Range<usize>, before: &[Word]) -> V
     }
     flush(&mut phrase);
     terms
+}
+
+/// Whether edited word `index` can be part of a learned term: typed in,
+/// shaped like a name, and not just a sentence's first word.
+fn is_name(after: &[Word], index: usize, before: &[Word]) -> bool {
+    let word = &after[index];
+    let starts_sentence = index == 0 || ends_sentence(after[index - 1].raw);
+    !before.iter().any(|kept| kept.bare == word.bare)
+        && looks_like_name(word.bare)
+        && !(starts_sentence && is_capitalized(word.bare))
 }
 
 fn ends_sentence(raw: &str) -> bool {
@@ -745,6 +757,31 @@ mod tests {
     }
 
     #[test]
+    fn a_rewrite_ending_in_a_long_name_is_not_a_correction() {
+        let field = "Hi team, call me tomorrow";
+        let inserted = "call me tomorrow";
+        let anchor = anchor(field, inserted, None).expect("the dictation is there");
+        let edited = edited_region(&anchor, "Hi team, ask for Alice Smith Monday")
+            .expect("only the dictation changed");
+        assert_eq!(
+            learn(inserted, edited, anchor.open(), &[]),
+            Outcome::Rewrite
+        );
+    }
+
+    #[test]
+    fn a_sentence_starter_takes_no_place_in_a_name() {
+        assert_eq!(
+            learned_in_field(
+                "Notes: I booked the room. Tell john",
+                "I booked the room. Tell john",
+                "Notes: I booked the room. Ask Jean Luc Picard"
+            ),
+            ["Jean Luc Picard"]
+        );
+    }
+
+    #[test]
     fn the_caret_picks_the_dictation_over_an_identical_later_copy() {
         let inserted = "send the deck to ronak today.";
         let later = " Again: send the deck to ronak today.";
@@ -799,6 +836,25 @@ mod tests {
     }
 
     #[test]
+    fn a_term_added_meanwhile_takes_no_learned_terms_place() {
+        let inserted = "ping ann bob cat dan eve fay about the plan for the launch next week";
+        let Outcome::Learned(terms) = learn(
+            inserted,
+            "ping Ann, Bob, Cat, Dan, Eve, Fay about the plan for the launch next week",
+            Open::default(),
+            &[],
+        ) else {
+            panic!("a correction");
+        };
+        // "Ann" was added in the Vocabulary pane while the watch ran.
+        let mut list = vec![entry("Ann")];
+        assert_eq!(
+            add_learned(&mut list, &terms).terms().collect::<Vec<_>>(),
+            ["Bob", "Cat", "Dan", "Eve", "Fay"]
+        );
+    }
+
+    #[test]
     fn undo_takes_back_only_what_the_correction_added() {
         let mut list = vec![entry("OpenCode")];
         let learned = add_learned(&mut list, &["Raunak".to_string(), "Zed".into()]);
@@ -822,5 +878,16 @@ mod tests {
         let edited = list.clone();
         assert_eq!(learned.undo(&mut list), 0);
         assert_eq!(list, edited);
+    }
+
+    #[test]
+    fn undo_leaves_a_term_removed_and_added_again() {
+        let mut list = vec![entry("OpenCode")];
+        let learned = add_learned(&mut list, &["Raunak".to_string(), "Zed".into()]);
+        vocabulary::remove(&mut list, "Raunak");
+        assert_eq!(vocabulary::add(&mut list, "Raunak", &[]), Ok(true));
+        let edited = list.clone();
+        assert_eq!(learned.undo(&mut list), 0, "the user's own Raunak stays");
+        assert_eq!(list, edited, "and so does Zed, saved alongside it");
     }
 }
