@@ -74,6 +74,7 @@ Feature             Pane  Toggle (settings.json, hex settings)   On: what it doe
 ├── Live chapters   no    labs.live_chapters           (macOS)   chapters a meeting while it records, boundary pass after Stop
 ├── Vocabulary help no labs.vocabulary_biasing                Parakeet transcription biased toward the vocabulary (#452/#457)
 ├── Words on screen no labs.screen_vocabulary         (macOS)   names and terms in the focused window become temporary vocabulary for each dictation; read locally through Accessibility, never saved, password fields skipped
+├── Learn from corrections no labs.learn_from_corrections (macOS) names and terms you type over a dictation's text right after it lands join the saved vocabulary; read locally through Accessibility, password fields skipped
 ├── Rewrite reads nearby text no labs.cursor_context (macOS) the mode's OpenCode rewrite reads the focused text element's text around the caret as context for names, terms, and where the result lands; password fields skipped
 ├── Switch model with keyboard language  no  keyboard_model_switching.enabled  (macOS, Windows, X11)
 │                                        the input source picks its mapped model (#216); General shows the mappings while on
@@ -536,6 +537,46 @@ stoplist and log levels, hashes, ordinals, times, units, random tokens, the
 `hex_never_reads_its_own_accessibility_tree` in
 [accessibility.rs](../../src/accessibility.rs). Not observed: a real Mac
 reading a real window, or a dictated word corrected by what was on screen.
+
+Learn from corrections (`learn-from-corrections`, macOS): while on, every
+successful insertion (`Paster::insert_text`, dictation and Paste last alike)
+starts a background watch of the focused text element
+(`dictation::corrections::watch`, `accessibility::WatchedField`). The pasted
+text must show up in the element's `AXValue` within 2 s, or the watch gives
+up; the text before and after it is the anchor. The watch then reads the
+whole value (at most 16 K UTF-16 units) every 100 ms for up to five minutes
+and stops at Return or keypad Enter (seen by the input monitor), focus moving
+to another element, the element disappearing or emptying, or a newer
+insertion. It learns from the last read taken before any of those, so a
+message sent with Return, or a newer paste, never reads as the user's edit.
+
+```ts
+Watch ends
+├── edit outside the dictation       -> nothing (the anchor's before/after text changed)
+├── text unchanged once trimmed      -> nothing
+├── either side over 400 words       -> nothing
+├── over 60% of words changed        -> nothing (a rewrite, not a correction)
+└── otherwise                        -> learn: words the edit put in that the dictation lacked,
+                                        shaped like names (capitalized away from a sentence's
+                                        start, all capitals, mixed case, letters with digits),
+                                        adjacent ones joined as a phrase of up to 3 words and
+                                        split at punctuation; at most 5 per edit, each at most
+                                        64 characters, none already in the vocabulary (any case)
+```
+
+Learned terms are added with `vocabulary::add` through the same
+read/merge/write transaction `hex vocabulary add` uses, then the runtime
+reloads settings; existing entries are never edited or removed. No model or
+network is involved, and the text is never logged: only the outcome and the
+count of terms added. Off, nothing reads Accessibility and no thread starts.
+Windows and Linux have no Accessibility text reader, so the lab is macOS
+only. Checks: `dictation::corrections::tests` (unchanged text, a corrected
+name, a capitalization fix, full names, punctuation, acronyms and digits,
+sentence-start capitals, reordered words, deletions, a rewrite, the word
+limit, dedupe against the vocabulary and within an edit, the anchor and
+edited region) and `learn_from_corrections_is_its_own_switch_and_macos_only`
+in [labs.rs](../../src/labs.rs). Not observed: a real Mac watching a real
+app's field.
 
 Rewrite reads nearby text (`cursor-context`, macOS): while on,
 each dictation reads the focused text element once, on a background thread, at
