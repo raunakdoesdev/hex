@@ -543,12 +543,23 @@ successful insertion (`Paster::insert_text`, dictation and Paste last alike)
 starts a background watch of the focused text element
 (`dictation::corrections::watch`, `accessibility::WatchedField`). The pasted
 text must show up in the element's `AXValue` within 2 s, or the watch gives
-up; the text before and after it is the anchor. The watch then reads the
-whole value (at most 16 K UTF-16 units) every 100 ms for up to five minutes
-and stops at Return or keypad Enter (seen by the input monitor), focus moving
-to another element, the element disappearing or emptying, or a newer
-insertion. It learns from the last read taken before any of those, so a
-message sent with Return, or a newer paste, never reads as the user's edit.
+up. Where it landed is bound to the insertion: with an `AXSelectedTextRange`
+caret, the pasted text must end exactly at the caret; without one it must
+appear exactly once, and a repeated copy is rejected rather than guessed. The
+text before and after it is the anchor. The watch then reads the whole value
+(at most 16 K UTF-16 units) every 100 ms for up to five minutes and stops at
+Return or keypad Enter (seen by the input monitor, or pressed by YOLO mode
+through `PasteMode::Return`), its app leaving the front, focus moving to
+another element, the element disappearing or emptying, a newer insertion,
+the next dictation's press, or the lab turning off. It learns from the last
+read taken before any of those, so a message sent with Return, or a newer
+paste, never reads as the user's edit; a lab turned off saves nothing.
+
+Each read that changes the text is compared at once, and its terms wait for
+the next dictation: that press (`recognition::capture_actions`, before audio
+starts) adds them to the in-memory vocabulary, so the capture hears them,
+with no Accessibility read or settings write on that path; the watch saves
+them on its own thread.
 
 ```ts
 Watch ends
@@ -560,23 +571,35 @@ Watch ends
                                         shaped like names (capitalized away from a sentence's
                                         start, all capitals, mixed case, letters with digits),
                                         adjacent ones joined as a phrase of up to 3 words and
-                                        split at punctuation; at most 5 per edit, each at most
-                                        64 characters, none already in the vocabulary (any case)
+                                        split at punctuation, spaced punctuation (" – ")
+                                        included; at most 5 per edit, each at most 64
+                                        characters, none already in the vocabulary (any case)
 ```
 
-Learned terms are added with `vocabulary::add` through the same
-read/merge/write transaction `hex vocabulary add` uses, then the runtime
-reloads settings; existing entries are never edited or removed. No model or
-network is involved, and the text is never logged: only the outcome and the
-count of terms added. Off, nothing reads Accessibility and no thread starts.
-Windows and Linux have no Accessibility text reader, so the lab is macOS
-only. Checks: `dictation::corrections::tests` (unchanged text, a corrected
-name, a capitalization fix, full names, punctuation, acronyms and digits,
-sentence-start capitals, reordered words, deletions, a rewrite, the word
-limit, dedupe against the vocabulary and within an edit, the anchor and
-edited region) and `learn_from_corrections_is_its_own_switch_and_macos_only`
-in [labs.rs](../../src/labs.rs). Not observed: a real Mac watching a real
-app's field.
+A side of the dictation with only whitespace next to it (a paste at the end
+or start of the field) is open: words typed on past it are drafting, not a
+correction, and never count, while a corrected last or first word still does.
+
+Learned terms are added with `vocabulary::add` inside `AppSettings::edit`,
+which applies them to the vocabulary as saved at that moment under the
+settings writer lock, so a vocabulary edit made while the watch ran survives;
+then the runtime reloads settings. Existing entries are never edited or
+removed, and the 500-entry cap holds. No model or network is involved, and
+the text is never logged: only the outcome and the count of terms added. Off,
+nothing reads Accessibility and no thread starts. Windows and Linux have no
+Accessibility text reader, so the lab is macOS only. Checks:
+`dictation::corrections::tests` (unchanged text, a corrected name, a
+capitalization fix, full names, punctuation and spaced punctuation, acronyms
+and digits, sentence-start capitals, reordered words, deletions, a rewrite,
+the word limit, dedupe against the vocabulary and within an edit, the anchor
+by caret and by a single match, open ends, the edited region),
+`dictation::corrections::watch::tests` (a scripted field: saving at the end,
+leaving the app, the lab turning off, YOLO's Return, the next dictation),
+`a_learned_vocabulary_edit_keeps_vocabulary_edits_saved_since_learning_began`
+in `app_settings::persistence::tests`, and
+`learn_from_corrections_is_its_own_switch_and_macos_only` in
+[labs.rs](../../src/labs.rs). Not observed: a real Mac watching a real app's
+field.
 
 Rewrite reads nearby text (`cursor-context`, macOS): while on,
 each dictation reads the focused text element once, on a background thread, at
