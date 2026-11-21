@@ -137,6 +137,7 @@ const MAX_WATCHED_CHARS: usize = 16 * 1024;
 /// corrections to read again while the user edits it. Never a password
 /// field, and never Hex's own.
 pub(crate) struct WatchedField {
+    pid: i32,
     application: CfObject,
     field: CfObject,
 }
@@ -148,10 +149,15 @@ impl WatchedField {
         if is_secure_text_field(&field) {
             return None;
         }
-        Some(Self { application, field })
+        Some(Self {
+            pid,
+            application,
+            field,
+        })
     }
 
-    /// Whether the app still has this element focused.
+    /// Whether the app still has this element focused, even from behind
+    /// another app.
     pub(crate) fn has_focus(&self) -> bool {
         copy_element(&self.application, c"AXFocusedUIElement").is_some_and(|now| {
             // SAFETY: both references are retained AXUIElements.
@@ -159,10 +165,24 @@ impl WatchedField {
         })
     }
 
+    /// Whether the element's app is still the one in front.
+    pub(crate) fn in_front(&self) -> bool {
+        crate::dictation::context::frontmost_pid() == Some(self.pid)
+    }
+
     /// The element's whole value, or `None` when it is gone, holds no text,
     /// or is longer than [`MAX_WATCHED_CHARS`].
     pub(crate) fn text(&self) -> Option<String> {
         copy_string_capped(&self.field, c"AXValue", MAX_WATCHED_CHARS)
+    }
+
+    /// The insertion point in UTF-16 units, or `None` when text is selected
+    /// or the app doesn't say.
+    pub(crate) fn caret(&self) -> Option<usize> {
+        let selection = copy_range(&self.field, c"AXSelectedTextRange")?;
+        (selection.length == 0)
+            .then(|| usize::try_from(selection.location).ok())
+            .flatten()
     }
 }
 

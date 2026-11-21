@@ -393,6 +393,18 @@ pub(crate) fn apply(entries: &[VocabularyEntry], boost: VocabularyBoost) {
     BOOST.store(boost as u8, Ordering::Relaxed);
 }
 
+/// Adds `terms` to the applied entries ahead of their save, which applies
+/// them again: Labs › Learn from corrections hands them to a dictation that
+/// starts while they are still being written.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn add_unsaved(terms: &[String]) {
+    let mut saved = SAVED
+        .get_or_init(Default::default)
+        .write()
+        .unwrap_or_else(|error| error.into_inner());
+    crate::dictation::corrections::add_learned(&mut saved, terms);
+}
+
 /// The entries saved in `root/settings.json`, read without loading
 /// `AppSettings` (which migrates and writes), for read-only commands. Empty
 /// when the file is missing or unreadable.

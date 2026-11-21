@@ -27,6 +27,8 @@ const MAX_TERMS: usize = 5;
 pub(crate) enum Outcome {
     /// The text reads the same once trimmed.
     Unchanged,
+    /// The user changed the text around the dictation too.
+    Outside,
     /// The dictation or the edited text is over [`MAX_WORDS`] words.
     TooLong,
     /// Too much changed to be a correction.
@@ -36,8 +38,21 @@ pub(crate) enum Outcome {
     Learned(Vec<String>),
 }
 
+/// Which sides of a dictation had no text next to it when it landed. Words
+/// typed on past an open side are the user drafting on, not correcting.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Open {
+    pub(crate) start: bool,
+    pub(crate) end: bool,
+}
+
 /// The terms `edited` introduced over `inserted` that `vocabulary` lacks.
-pub(crate) fn learn(inserted: &str, edited: &str, vocabulary: &[VocabularyEntry]) -> Outcome {
+pub(crate) fn learn(
+    inserted: &str,
+    edited: &str,
+    open: Open,
+    vocabulary: &[VocabularyEntry],
+) -> Outcome {
     if inserted.trim() == edited.trim() {
         return Outcome::Unchanged;
     }
@@ -46,7 +61,7 @@ pub(crate) fn learn(inserted: &str, edited: &str, vocabulary: &[VocabularyEntry]
     if before.len() > MAX_WORDS || after.len() > MAX_WORDS {
         return Outcome::TooLong;
     }
-    let diff = diff(&before, &after);
+    let diff = diff(&before, &after, open);
     if diff.distance > MAX_DISTANCE {
         return Outcome::Rewrite;
     }
@@ -69,6 +84,15 @@ pub(crate) fn learn(inserted: &str, edited: &str, vocabulary: &[VocabularyEntry]
     Outcome::Learned(terms)
 }
 
+/// Adds learned `terms` to `vocabulary`, skipping any it has in any case
+/// and any past its 500-entry cap. Returns how many it added.
+pub(crate) fn add_learned(vocabulary: &mut Vec<VocabularyEntry>, terms: &[String]) -> usize {
+    terms
+        .iter()
+        .filter(|term| vocabulary::add(vocabulary, term, &[]) == Ok(true))
+        .count()
+}
+
 /// Where a dictation landed in a field: the field's text before and after
 /// it, as it read once the paste arrived.
 #[derive(Clone, Debug, PartialEq)]
@@ -77,18 +101,64 @@ pub(crate) struct Anchor {
     after: String,
 }
 
-/// The text around the last place `inserted` appears in `field`, or `None`
-/// when it isn't there (yet).
-pub(crate) fn anchor(field: &str, inserted: &str) -> Option<Anchor> {
-    let inserted = inserted.trim();
-    if inserted.is_empty() {
+impl Anchor {
+    /// The sides with only whitespace next to the dictation.
+    pub(crate) fn open(&self) -> Open {
+        Open {
+            start: self.before.trim().is_empty(),
+            end: self.after.trim().is_empty(),
+        }
+    }
+}
+
+/// The text around `inserted` in `field`. With `caret`, the insertion point
+/// in UTF-16 units as the paste left it, `inserted` must end right there;
+/// without one it must appear exactly once, since a guess could compare the
+/// wrong copy. `None` when it isn't there (yet), or the field can't say
+/// which copy is the dictation.
+pub(crate) fn anchor(field: &str, inserted: &str, caret: Option<usize>) -> Option<Anchor> {
+    let trimmed = inserted.trim();
+    if trimmed.is_empty() {
         return None;
     }
-    let start = field.rfind(inserted)?;
+    let start = match caret {
+        Some(caret) => {
+            let end = byte_offset(field, caret)?;
+            let start = end.checked_sub(inserted.len())?;
+            if field.get(start..end)? != inserted {
+                return None;
+            }
+            start + (inserted.len() - inserted.trim_start().len())
+        }
+        None => {
+            let mut found = field.match_indices(trimmed).map(|(start, _)| start);
+            let start = found.next()?;
+            if found.next().is_some() {
+                return None;
+            }
+            start
+        }
+    };
     Some(Anchor {
         before: field[..start].to_owned(),
-        after: field[start + inserted.len()..].to_owned(),
+        after: field[start + trimmed.len()..].to_owned(),
     })
+}
+
+/// The byte offset of `units` UTF-16 code units into `text`, or `None` past
+/// its end or inside a character.
+fn byte_offset(text: &str, units: usize) -> Option<usize> {
+    let mut seen = 0;
+    for (offset, c) in text.char_indices() {
+        if seen == units {
+            return Some(offset);
+        }
+        if seen > units {
+            return None;
+        }
+        seen += c.len_utf16();
+    }
+    (seen == units).then_some(text.len())
 }
 
 /// What now stands where the dictation was: `field` less the text that
@@ -99,23 +169,33 @@ pub(crate) fn edited_region<'a>(anchor: &Anchor, field: &'a str) -> Option<&'a s
     rest.strip_suffix(anchor.after.as_str())
 }
 
-/// One word as typed, and its letters without surrounding punctuation.
+/// One word as typed, its letters without surrounding punctuation, and
+/// whether punctuation standing on its own (" – ") came just before it.
 #[derive(Debug)]
 struct Word<'a> {
     raw: &'a str,
     bare: &'a str,
+    after_mark: bool,
 }
 
 fn words(text: &str) -> Vec<Word<'_>> {
-    text.split_whitespace()
-        .map(|raw| Word {
+    let mut words = Vec::new();
+    let mut mark = false;
+    for raw in text.split_whitespace() {
+        let bare = raw
+            .trim_start_matches(|c: char| !c.is_alphanumeric())
+            .trim_end_matches(|c: char| !c.is_alphanumeric() && c != '+' && c != '#');
+        if bare.is_empty() {
+            mark = true;
+            continue;
+        }
+        words.push(Word {
             raw,
-            bare: raw
-                .trim_start_matches(|c: char| !c.is_alphanumeric())
-                .trim_end_matches(|c: char| !c.is_alphanumeric() && c != '+' && c != '#'),
-        })
-        .filter(|word| !word.bare.is_empty())
-        .collect()
+            bare,
+            after_mark: std::mem::take(&mut mark),
+        });
+    }
+    words
 }
 
 /// A word-level comparison: the runs of edited words that stand where the
@@ -127,15 +207,16 @@ struct Diff {
 }
 
 /// Levenshtein over words, then a walk back through the table to find
-/// which edited words were inserted or substituted.
-fn diff(before: &[Word], after: &[Word]) -> Diff {
+/// which edited words were inserted or substituted. Edited words before an
+/// open start or past an open end cost nothing and never count as changed.
+fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
     let (rows, columns) = (before.len() + 1, after.len() + 1);
     let mut cost = vec![0_usize; rows * columns];
     for i in 0..rows {
         cost[i * columns] = i;
     }
     for (j, cell) in cost.iter_mut().enumerate().take(columns) {
-        *cell = j;
+        *cell = if open.start { 0 } else { j };
     }
     for i in 1..rows {
         for j in 1..columns {
@@ -145,9 +226,20 @@ fn diff(before: &[Word], after: &[Word]) -> Diff {
                 .min(cost[i * columns + j - 1] + 1);
         }
     }
+    let last = before.len() * columns;
+    // Past an open end, the cheapest place for the dictation to stop, the
+    // later one on a tie.
+    let end = if open.end {
+        (0..columns)
+            .rev()
+            .min_by_key(|&j| cost[last + j])
+            .unwrap_or(0)
+    } else {
+        after.len()
+    };
     let mut changed = vec![false; after.len()];
-    let (mut i, mut j) = (before.len(), after.len());
-    while i > 0 || j > 0 {
+    let (mut i, mut j) = (before.len(), end);
+    while i > 0 || (j > 0 && !open.start) {
         let here = cost[i * columns + j];
         if i > 0 && j > 0 {
             let substitute = usize::from(before[i - 1].bare != after[j - 1].bare);
@@ -177,10 +269,10 @@ fn diff(before: &[Word], after: &[Word]) -> Diff {
             _ => {}
         }
     }
-    let longest = before.len().max(after.len()).max(1);
+    let longest = before.len().max(end - j).max(1);
     Diff {
         added,
-        distance: cost[rows * columns - 1] as f32 / longest as f32,
+        distance: cost[last + end] as f32 / longest as f32,
     }
 }
 
@@ -204,7 +296,11 @@ fn candidates(after: &[Word], run: std::ops::Range<usize>, before: &[Word]) -> V
         let name = typed_in
             && looks_like_name(word.bare)
             && !(starts_sentence && is_capitalized(word.bare));
-        if !name || phrase.len() == MAX_PHRASE_WORDS || !word.raw.starts_with(word.bare) {
+        if !name
+            || phrase.len() == MAX_PHRASE_WORDS
+            || word.after_mark
+            || !word.raw.starts_with(word.bare)
+        {
             flush(&mut phrase);
         }
         if name {
@@ -256,7 +352,7 @@ mod tests {
     }
 
     fn learned(inserted: &str, edited: &str) -> Vec<String> {
-        match learn(inserted, edited, &[]) {
+        match learn(inserted, edited, Open::default(), &[]) {
             Outcome::Learned(terms) => terms,
             other => panic!("expected terms, got {other:?}"),
         }
@@ -265,7 +361,12 @@ mod tests {
     #[test]
     fn unchanged_text_teaches_nothing() {
         assert_eq!(
-            learn("Send it to Ronak.", "  Send it to Ronak. ", &[]),
+            learn(
+                "Send it to Ronak.",
+                "  Send it to Ronak. ",
+                Open::default(),
+                &[]
+            ),
             Outcome::Unchanged
         );
     }
@@ -356,6 +457,7 @@ mod tests {
             learn(
                 "so I was thinking we could maybe meet up",
                 "Lunch with Priya at Zuni Cafe on Thursday",
+                Open::default(),
                 &[]
             ),
             Outcome::Rewrite
@@ -366,8 +468,14 @@ mod tests {
     fn text_over_the_word_limit_is_skipped() {
         let long = "word ".repeat(MAX_WORDS + 1);
         let edited = format!("{long} Raunak");
-        assert_eq!(learn(&long, &edited, &[]), Outcome::TooLong);
-        assert_eq!(learn("hi ronak", &edited, &[]), Outcome::TooLong);
+        assert_eq!(
+            learn(&long, &edited, Open::default(), &[]),
+            Outcome::TooLong
+        );
+        assert_eq!(
+            learn("hi ronak", &edited, Open::default(), &[]),
+            Outcome::TooLong
+        );
     }
 
     #[test]
@@ -377,6 +485,7 @@ mod tests {
             learn(
                 "ask ronak about hecks and zed",
                 "ask Raunak about Hex and Zed",
+                Open::default(),
                 &vocabulary
             ),
             Outcome::Learned(vec!["Zed".into()])
@@ -397,7 +506,8 @@ mod tests {
     #[test]
     fn the_edited_region_is_what_replaced_the_dictation() {
         let field = "Hi team,\nsend it to ronak today\nThanks";
-        let anchor = anchor(field, " send it to ronak today ").expect("the dictation is there");
+        let anchor =
+            anchor(field, " send it to ronak today ", None).expect("the dictation is there");
         let edited = "Hi team,\nsend it to Raunak today\nThanks";
         assert_eq!(
             edited_region(&anchor, edited),
@@ -408,12 +518,126 @@ mod tests {
     #[test]
     fn an_edit_outside_the_dictation_has_no_region() {
         let field = "Hi team, send it to ronak";
-        let anchor = anchor(field, "send it to ronak").expect("the dictation is there");
+        let anchor = anchor(field, "send it to ronak", None).expect("the dictation is there");
         assert_eq!(edited_region(&anchor, "Hello all, send it to Raunak"), None);
         assert_eq!(anchor_missing(), None);
     }
 
     fn anchor_missing() -> Option<Anchor> {
-        anchor("nothing here", "send it")
+        anchor("nothing here", "send it", None)
+    }
+
+    /// What `field_now` teaches about `inserted`, which the field read as
+    /// `field_then` once it landed and where it appears once.
+    fn learned_in_field(field_then: &str, inserted: &str, field_now: &str) -> Vec<String> {
+        let anchor = anchor(field_then, inserted, None).expect("the dictation is there");
+        let edited = edited_region(&anchor, field_now).expect("only the dictation changed");
+        match learn(inserted, edited, anchor.open(), &[]) {
+            Outcome::Learned(terms) => terms,
+            other => panic!("expected terms, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spaced_punctuation_splits_names_into_separate_terms() {
+        assert_eq!(
+            learned(
+                "invite ron and sam today please",
+                "invite Raunak – Sahil today please"
+            ),
+            ["Raunak", "Sahil"]
+        );
+    }
+
+    #[test]
+    fn text_typed_on_after_a_paste_at_the_end_is_not_a_correction() {
+        let inserted = "Please send the deck to ronak today.";
+        let field = format!("Hi team, {inserted}");
+        assert_eq!(
+            learned_in_field(
+                &field,
+                inserted,
+                &format!("{field} I spoke with Priya this morning.")
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            learned_in_field(inserted, inserted, &format!("Priya said: {inserted}")),
+            Vec::<String>::new(),
+            "nor is text typed in before a paste into an empty field"
+        );
+    }
+
+    #[test]
+    fn a_corrected_last_word_at_the_end_of_the_field_is_learned() {
+        let field = "Hi team, send the deck to ronak";
+        assert_eq!(
+            learned_in_field(
+                field,
+                "send the deck to ronak",
+                "Hi team, send the deck to Raunak"
+            ),
+            ["Raunak"]
+        );
+        assert_eq!(
+            learned_in_field(
+                field,
+                "send the deck to ronak",
+                "Hi team, send the deck to Raunak. I spoke with Priya."
+            ),
+            ["Raunak"],
+            "the correction counts, the sentence typed after it doesn't"
+        );
+    }
+
+    #[test]
+    fn the_caret_picks_the_dictation_over_an_identical_later_copy() {
+        let inserted = "send the deck to ronak today.";
+        let later = " Again: send the deck to ronak today.";
+        let field = format!("Notes: {inserted}{later}");
+        let caret = format!("Notes: {inserted}").encode_utf16().count();
+        let anchor =
+            anchor(&field, inserted, Some(caret)).expect("the dictation ends at the caret");
+        let edited = format!("Notes: send the deck to Raunak today.{later}");
+        assert_eq!(
+            edited_region(&anchor, &edited),
+            Some("send the deck to Raunak today.")
+        );
+    }
+
+    #[test]
+    fn without_a_caret_a_repeated_dictation_is_not_guessed() {
+        let field = "send it. send it.";
+        assert_eq!(anchor(field, "send it.", None), None);
+        assert_eq!(
+            anchor(field, "send it.", Some(3)),
+            None,
+            "a caret the dictation doesn't end at"
+        );
+    }
+
+    #[test]
+    fn the_caret_counts_utf16_units_and_keeps_a_leading_space_out() {
+        let field = "Café 👋 hi ronak";
+        let caret = field.encode_utf16().count();
+        let anchor =
+            anchor(field, " hi ronak", Some(caret)).expect("the dictation ends at the caret");
+        assert_eq!(
+            edited_region(&anchor, "Café 👋 hi Raunak"),
+            Some("hi Raunak")
+        );
+    }
+
+    #[test]
+    fn learned_terms_join_the_list_once_and_stop_at_its_cap() {
+        let mut list = vec![entry("raunak")];
+        let terms = ["Raunak".to_string(), "Zed".into(), "Zed".into()];
+        assert_eq!(add_learned(&mut list, &terms), 1);
+        assert_eq!(list, [entry("raunak"), entry("Zed")]);
+        let mut full: Vec<_> = (0..vocabulary::MAX_ENTRIES)
+            .map(|index| entry(&format!("Term{index}")))
+            .collect();
+        assert_eq!(add_learned(&mut full, &terms), 0);
+        assert_eq!(full.len(), vocabulary::MAX_ENTRIES);
     }
 }

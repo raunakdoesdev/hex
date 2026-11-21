@@ -304,19 +304,62 @@ impl AppSettings {
                 "Settings weren't read successfully. Reload settings before saving. Nothing was saved."
             ));
         }
+        let current = Self::read_current(path, policy)?;
+        Self::commit_locked(&current, self, candidate, path, policy, &mut revision)
+    }
+
+    /// Applies `edit` to the settings as saved right now, under the lock
+    /// every writer holds, so an edit committed after any earlier read
+    /// survives. Writes only when `edit` reports a change, and returns the
+    /// saved settings then.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn edit(edit: impl FnOnce(&mut Self) -> bool) -> Result<Option<Self>> {
+        let path = path()?;
+        Self::edit_at(&path, Policy::current(), edit)
+    }
+
+    pub(crate) fn edit_at(
+        path: &Path,
+        policy: Policy,
+        edit: impl FnOnce(&mut Self) -> bool,
+    ) -> Result<Option<Self>> {
+        let mut revision = WRITER.lock().unwrap_or_else(|error| error.into_inner());
+        let current = Self::read_current(path, policy)?;
+        let mut candidate = current.clone();
+        if !edit(&mut candidate) {
+            return Ok(None);
+        }
+        Self::commit_locked(&current, &current, &candidate, path, policy, &mut revision).map(Some)
+    }
+
+    /// The file as saved now, for a writer holding the lock.
+    fn read_current(path: &Path, policy: Policy) -> Result<Self> {
         let (current, _, issue) = Self::read_managed_checked_from(path, policy)?;
         if issue.is_some() {
             return Err(eyre!("Settings couldn't be read. Nothing was saved."));
         }
-        let mut merged = json(&current)?;
-        merge(&mut merged, &json(self)?, &json(candidate)?);
+        Ok(current)
+    }
+
+    /// Writes `current` with the edits from `base` to `candidate`, for a
+    /// writer holding the lock.
+    fn commit_locked(
+        current: &Self,
+        base: &Self,
+        candidate: &Self,
+        path: &Path,
+        policy: Policy,
+        revision: &mut u64,
+    ) -> Result<Self> {
+        let mut merged = json(current)?;
+        merge(&mut merged, &json(base)?, &json(candidate)?);
         let mut merged: Self = serde_json::from_value(merged)?;
         // The merge can land the dictation shortcut on a shortcut the file
         // already had, so both are held to the same rule a load repairs.
         merged.clear_shortcuts_sharing_dictation();
         merged.write_locked(path, policy)?;
         policy.enforce(&mut merged);
-        stamp(&mut merged, path, true, &mut revision);
+        stamp(&mut merged, path, true, revision);
         COMMITTED_REVISION.store(merged.source.revision, Ordering::Release);
         merged.apply_runtime();
         Ok(merged)

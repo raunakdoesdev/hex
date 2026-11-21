@@ -249,6 +249,7 @@ impl Paster {
             return Ok(());
         }
         if matches!(mode, PasteMode::Return) {
+            crate::dictation::corrections::watch::note_return();
             return keyboard::post_return();
         }
         self.insert_text(text, mode, None)
