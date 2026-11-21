@@ -1785,6 +1785,7 @@ mod tests {
         include_str!("../calendar_menu.rs"),
         include_str!("../macos_rune/status_item.rs"),
         include_str!("../rune_ui/history/unified.rs"),
+        include_str!("../rune_ui/live_text.rs"),
         include_str!("../rune_ui/onboarding_kit/first_screen.rs"),
         include_str!("../rune_ui/onboarding_kit/login.rs"),
         include_str!("../rune_ui/onboarding_kit/versus/stage_fx.rs"),

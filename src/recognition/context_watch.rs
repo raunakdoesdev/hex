@@ -82,6 +82,10 @@ impl ContextWatch {
     /// its page and its screen's vocabulary now, once per capture, and never
     /// for an intend without a pending capture.
     pub(super) fn intend(&mut self) {
+        // Labs › Learn from corrections: a press that only started a chord
+        // left the watch running; a real capture ends it.
+        #[cfg(target_os = "macos")]
+        crate::dictation::corrections::watch::capture_intended();
         let pending = self.capture.pending();
         self.screen.start(pending);
         self.caret.start(pending);

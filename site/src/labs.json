@@ -913,6 +913,17 @@
       ],
       "summary": "Import terms from a CSV file in the Vocabulary sheet, or save the whole list as one",
       "title": "Vocabulary files"
+    },
+    {
+      "added": "2026-11-20",
+      "group": "dictation",
+      "groupTitle": "Dictation",
+      "id": "learn-from-corrections",
+      "oses": [
+        "macos"
+      ],
+      "summary": "When you fix a name in text Hex just pasted, Hex adds it to your Vocabulary",
+      "title": "Learn from corrections"
     }
   ]
 }

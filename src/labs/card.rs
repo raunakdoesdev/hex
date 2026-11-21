@@ -91,6 +91,7 @@ impl Feature {
             Self::DropTranscribe => "Transcribe dropped audio",
             Self::PasteLastPicker => "Paste Last picker",
             Self::VocabularyFiles => "Vocabulary files",
+            Self::LearnFromCorrections => "Learn from corrections",
         }
     }
 
@@ -331,6 +332,9 @@ impl Feature {
             }
             Self::VocabularyFiles => {
                 "Import terms from a CSV file in the Vocabulary sheet, or save the whole list as one"
+            }
+            Self::LearnFromCorrections => {
+                "When you fix a name in text Hex just pasted, Hex adds it to your Vocabulary"
             }
         }
     }

@@ -85,6 +85,16 @@ pub fn cursor_context() -> bool {
     CURSOR_CONTEXT.load(Ordering::Acquire) && Feature::CursorContext.on_this_os()
 }
 
+/// A dictation's insertion is watched for the user's corrections, and the
+/// names they type in join the vocabulary (macOS; read as each paste lands).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn learn_from_corrections() -> bool {
+    // The state word has no bit for it: its own atomic, written by
+    // `labs::apply`, and loaded here first in a process that never applied.
+    let _ = state();
+    LEARN_FROM_CORRECTIONS.load(Ordering::Acquire) && Feature::LearnFromCorrections.on_this_os()
+}
+
 /// A finished Annotate capture copies to the clipboard as one light zip file
 /// rather than its image and summary (read where a written capture is copied).
 #[cfg_attr(not(hex_capture), allow(dead_code))]

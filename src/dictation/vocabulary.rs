@@ -386,11 +386,34 @@ pub(crate) fn fold_hints(list: &mut Vec<VocabularyEntry>, hints: &str) -> bool {
 
 /// Called by `AppSettings` whenever settings load or save.
 pub(crate) fn apply(entries: &[VocabularyEntry], boost: VocabularyBoost) {
-    *SAVED
+    let changed = {
+        let mut saved = SAVED
+            .get_or_init(Default::default)
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        let changed = *saved != entries;
+        *saved = entries.to_vec();
+        changed
+    };
+    BOOST.store(boost as u8, Ordering::Relaxed);
+    // Labs › Learn from corrections: the list changed since its notice
+    // showed, so its Undo would act on entries the user may have remade
+    // (a term removed and added again reads the same).
+    if changed {
+        crate::rune_ui::live_text::dismiss_learned();
+    }
+}
+
+/// Adds `terms` to the applied entries ahead of their save, which applies
+/// them again: Labs › Learn from corrections hands them to a dictation that
+/// starts while they are still being written.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn add_unsaved(terms: &[String]) {
+    let mut saved = SAVED
         .get_or_init(Default::default)
         .write()
-        .unwrap_or_else(|error| error.into_inner()) = entries.to_vec();
-    BOOST.store(boost as u8, Ordering::Relaxed);
+        .unwrap_or_else(|error| error.into_inner());
+    let _ = crate::dictation::corrections::add_learned(&mut saved, terms);
 }
 
 /// The entries saved in `root/settings.json`, read without loading

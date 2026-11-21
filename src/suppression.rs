@@ -306,6 +306,12 @@ impl Drop for PendingInputAcknowledgement<'_> {
 
 impl InputActivity {
     fn observe(&self, input: InputEvent, suppressed: bool) {
+        if let InputEvent::Key {
+            code, down: true, ..
+        } = input
+        {
+            crate::dictation::corrections::watch::note_key_down(code);
+        }
         if !suppressed
             && matches!(
                 input,

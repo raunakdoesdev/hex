@@ -74,6 +74,7 @@ Feature             Pane  Toggle (settings.json, hex settings)   On: what it doe
 ├── Live chapters   no    labs.live_chapters           (macOS)   chapters a meeting while it records, boundary pass after Stop
 ├── Vocabulary help no labs.vocabulary_biasing                Parakeet transcription biased toward the vocabulary (#452/#457)
 ├── Words on screen no labs.screen_vocabulary         (macOS)   names and terms in the focused window become temporary vocabulary for each dictation; read locally through Accessibility, never saved, password fields skipped
+├── Learn from corrections no labs.learn_from_corrections (macOS) names and terms you type over a dictation's text right after it lands join the saved vocabulary; read locally through Accessibility, password fields skipped
 ├── Rewrite reads nearby text no labs.cursor_context (macOS) the mode's OpenCode rewrite reads the focused text element's text around the caret as context for names, terms, and where the result lands; password fields skipped
 ├── Switch model with keyboard language  no  keyboard_model_switching.enabled  (macOS, Windows, X11)
 │                                        the input source picks its mapped model (#216); General shows the mappings while on
@@ -536,6 +537,96 @@ stoplist and log levels, hashes, ordinals, times, units, random tokens, the
 `hex_never_reads_its_own_accessibility_tree` in
 [accessibility.rs](../../src/accessibility.rs). Not observed: a real Mac
 reading a real window, or a dictated word corrected by what was on screen.
+
+Learn from corrections (`learn-from-corrections`, macOS): while on, every
+successful insertion (`Paster::insert_text`, dictation and Paste last alike)
+starts a background watch of the focused text element
+(`dictation::corrections::watch`, `accessibility::WatchedField`). The pasted
+text must show up in the element's `AXValue` within 2 s, or the watch gives
+up. Where it landed is bound to the insertion: with an `AXSelectedTextRange`
+caret, the pasted text must end exactly at the caret; without one it must
+appear exactly once, and a repeated copy is rejected rather than guessed. The
+text before and after it is the anchor. The watch then reads the whole value
+(at most 16 K UTF-16 units) every 100 ms for up to five minutes and stops at
+Return or keypad Enter (seen by the input monitor, or pressed by YOLO mode
+through `PasteMode::Return`), its app leaving the front, focus moving to
+another element, the element disappearing or emptying, a newer insertion,
+the next capture becoming real (`ContextWatch::intend`: a hold past its
+threshold, a control start, a released microphone opening, or a local API
+start), or the lab turning off. Each poll checks these only after its read
+returns, so a read taken after any of them, even in the gap before the read,
+is discarded. It learns from the last
+read taken before any of those, so a message sent with Return, or a newer
+paste, never reads as the user's edit; a lab turned off saves nothing.
+
+Each read that changes the text is compared at once, and its terms wait for
+the next dictation. That shortcut's press (`recognition::capture_actions`,
+before audio starts) adds them to the in-memory vocabulary, so the capture's
+stream hears them, with no Accessibility read or settings write on that path.
+The press does not end the watch, because it may be a chord such as
+Option–Left on the way to the word being fixed. The watch ends once the
+capture is real, and saves the terms on its own thread. All the presses of
+one watch add at most 5 terms in memory, and when a watch ends the
+in-memory vocabulary is rebuilt from the saved one, so a term heard on a
+press but never saved (a correction reverted, the lab turned off) does not
+linger.
+
+```ts
+Watch ends
+├── edit outside the dictation       -> nothing (the anchor's before/after text changed)
+├── text unchanged once trimmed      -> nothing
+├── either side over 400 words       -> nothing
+├── over 60% of words changed        -> nothing (a rewrite, not a correction)
+└── otherwise                        -> learn: words the edit put in that the dictation lacked,
+                                        shaped like names (capitalized away from a sentence's
+                                        start, all capitals, mixed case, letters with digits),
+                                        adjacent ones joined as a phrase of up to 3 words and
+                                        split at punctuation, spaced punctuation (" – ")
+                                        included; at most 5 per edit, counted after skipping
+                                        any already in the vocabulary as saved (any case),
+                                        each at most 64 characters
+```
+
+A side of the dictation with only whitespace next to it (a paste at the end
+or start of the field) is open: words typed on past it are drafting, not a
+correction, and never count, while a corrected last or first word still does.
+A name typed over the last word may run on past it ("ronak" -> "Raunak
+Chowdhuri"): up to a phrase's length of unbroken name-shaped words after a
+changed last word belong to the correction.
+
+Learned terms are added with `vocabulary::add` inside `AppSettings::edit`,
+which applies them to the vocabulary as saved at that moment under the
+settings writer lock, so a vocabulary edit made while the watch ran survives;
+then the runtime reloads settings. Existing entries are never edited or
+removed, and the 500-entry cap holds. A save that added something says so on
+the live text plate beside the HUD for 6 s ("Added Raunak to Vocabulary",
+or "Added 3 terms to Vocabulary"), with an Undo, the plate's one click
+region; it never takes focus, live words take the plate back from it, and a
+new capture or the lab turning off, from the card or `hex settings set`,
+dismisses it, and so does any change to the vocabulary after its save (a
+respelling, a removal, a term removed and added again, an unrelated term):
+once the notice is gone, Undo does nothing. Undo removes, in the same locked
+`AppSettings::edit`, the entries this save added, and only if the saved
+vocabulary is still exactly as this save left it
+(`corrections::Learned::undo`). For a 6 s notice this is the simplest rule
+that never removes an entry the user made. No model or network is involved, and
+the text is never logged: only the outcome and the count of terms added. Off,
+nothing reads Accessibility and no thread starts. Windows and Linux have no
+Accessibility text reader, so the lab is macOS only. Checks:
+`dictation::corrections::tests` (unchanged text, a corrected name, a
+capitalization fix, full names, punctuation and spaced punctuation, acronyms
+and digits, sentence-start capitals, reordered words, deletions, a rewrite,
+the word limit, dedupe against the vocabulary and within an edit, the anchor
+by caret and by a single match, open ends, the edited region),
+`dictation::corrections::watch::tests` (a scripted field: saving at the end,
+leaving the app, the lab turning off, YOLO's Return, the next dictation, a
+chord press that keeps the watch, the in-memory cap across presses, a
+reverted correction leaving nothing in memory),
+`a_learned_vocabulary_edit_keeps_vocabulary_edits_saved_since_learning_began`
+in `app_settings::persistence::tests`, and
+`learn_from_corrections_is_its_own_switch_and_macos_only` in
+[labs.rs](../../src/labs.rs). Not observed: a real Mac watching a real app's
+field.
 
 Rewrite reads nearby text (`cursor-context`, macOS): while on,
 each dictation reads the focused text element once, on a background thread, at

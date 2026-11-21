@@ -91,6 +91,43 @@ fn base_aware_updates_keep_other_writers_and_nested_unknown_fields() {
     assert_eq!(saved["meetings"]["future"]["mode"], "keep");
 }
 
+#[test]
+fn a_learned_vocabulary_edit_keeps_vocabulary_edits_saved_since_learning_began() {
+    let file = SettingsFile::new(br#"{"vocabulary":["OpenCode","Hecks"]}"#);
+    // Learning starts from this read of the list.
+    let learning = AppSettings::load_from(&file.path).unwrap();
+    let terms = ["Raunak".to_string(), "Hex".into()];
+    // A manual add, a spelling change, and a removal land after it.
+    let mut manual = learning.clone();
+    crate::dictation::vocabulary::remove(&mut manual.vocabulary, "OpenCode");
+    manual.vocabulary[0].term = "Hex".into();
+    crate::dictation::vocabulary::add(&mut manual.vocabulary, "Zed", &[]).unwrap();
+    learning
+        .update_at(&manual, &file.path, Policy::default())
+        .unwrap();
+    let saved = AppSettings::edit_at(&file.path, Policy::default(), |settings| {
+        !crate::dictation::corrections::add_learned(&mut settings.vocabulary, &terms).is_empty()
+    })
+    .unwrap()
+    .expect("Raunak is new");
+    let terms: Vec<_> = saved
+        .vocabulary
+        .iter()
+        .map(|entry| entry.term.as_str())
+        .collect();
+    assert_eq!(terms, ["Hex", "Zed", "Raunak"]);
+    assert_eq!(
+        AppSettings::load_from(&file.path).unwrap().vocabulary,
+        saved.vocabulary
+    );
+    assert!(
+        AppSettings::edit_at(&file.path, Policy::default(), |_| false)
+            .unwrap()
+            .is_none(),
+        "an edit that changes nothing writes nothing"
+    );
+}
+
 /// The retired Yearly stats switch is an understood migration input, not an
 /// unknown setting: a load never copies it back into the file, and its choice
 /// lands on Dictation stats.
