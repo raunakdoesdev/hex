@@ -208,7 +208,8 @@ pub(crate) fn edited_region<'a>(anchor: &Anchor, field: &'a str) -> Option<&'a s
 }
 
 /// One word as typed, its letters without surrounding punctuation, and
-/// whether punctuation standing on its own (" – ") came just before it.
+/// whether punctuation standing on its own (" – ") or a line break came
+/// just before it.
 #[derive(Debug)]
 struct Word<'a> {
     raw: &'a str,
@@ -219,19 +220,22 @@ struct Word<'a> {
 fn words(text: &str) -> Vec<Word<'_>> {
     let mut words = Vec::new();
     let mut mark = false;
-    for raw in text.split_whitespace() {
-        let bare = raw
-            .trim_start_matches(|c: char| !c.is_alphanumeric())
-            .trim_end_matches(|c: char| !c.is_alphanumeric() && c != '+' && c != '#');
-        if bare.is_empty() {
-            mark = true;
-            continue;
+    for (number, line) in text.lines().enumerate() {
+        mark |= number > 0;
+        for raw in line.split_whitespace() {
+            let bare = raw
+                .trim_start_matches(|c: char| !c.is_alphanumeric())
+                .trim_end_matches(|c: char| !c.is_alphanumeric() && c != '+' && c != '#');
+            if bare.is_empty() {
+                mark = true;
+                continue;
+            }
+            words.push(Word {
+                raw,
+                bare,
+                after_mark: std::mem::take(&mut mark),
+            });
         }
-        words.push(Word {
-            raw,
-            bare,
-            after_mark: std::mem::take(&mut mark),
-        });
     }
     words
 }
@@ -803,6 +807,28 @@ mod tests {
             ),
             ["Smythe"],
             "a word the dictation had"
+        );
+    }
+
+    #[test]
+    fn a_name_runs_on_within_its_line_only() {
+        assert_eq!(
+            learned_in_field(
+                "Notes: John told me to call mary",
+                "John told me to call mary",
+                "Notes: John told me to call Mary\nJohn Smith replied"
+            ),
+            ["Mary"],
+            "a line pasted after the correction"
+        );
+        assert_eq!(
+            learned_in_field(
+                "Notes: John called jon",
+                "John called jon",
+                "Notes: John called John Smythe"
+            ),
+            ["Smythe"],
+            "a surname on the same line"
         );
     }
 
