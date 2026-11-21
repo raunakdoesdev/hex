@@ -485,6 +485,8 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Import terms from a CSV file in the Vocabulary sheet, or save the whole list as one", "Importe termos de um arquivo CSV na folha de vocabulário ou salve a lista inteira como um"),
     ("Learn from corrections", "Aprender com correções"),
     ("When you fix a name in text Hex just pasted, Hex adds it to your Vocabulary", "Quando você corrige um nome no texto que o Hex acabou de colar, o Hex o adiciona ao seu vocabulário"),
+    ("Added {} to Vocabulary", "{} adicionado ao vocabulário"),
+    ("Added {} terms to Vocabulary", "{} termos adicionados ao vocabulário"),
     ("History off", "Histórico desativado"),
     ("Kept forever", "Mantido para sempre"),
     ("Kept {}", "Mantido por {}"),
