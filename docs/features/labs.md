@@ -553,8 +553,9 @@ through `PasteMode::Return`), its app leaving the front, focus moving to
 another element, the element disappearing or emptying, a newer insertion,
 the next capture becoming real (`ContextWatch::intend`: a hold past its
 threshold, a control start, a released microphone opening, or a local API
-start), or the lab turning off. Each of these is checked again after every
-read, so a read that began after one is discarded. It learns from the last
+start), or the lab turning off. Each poll checks these only after its read
+returns, so a read taken after any of them, even in the gap before the read,
+is discarded. It learns from the last
 read taken before any of those, so a message sent with Return, or a newer
 paste, never reads as the user's edit; a lab turned off saves nothing.
 
@@ -592,7 +593,14 @@ Learned terms are added with `vocabulary::add` inside `AppSettings::edit`,
 which applies them to the vocabulary as saved at that moment under the
 settings writer lock, so a vocabulary edit made while the watch ran survives;
 then the runtime reloads settings. Existing entries are never edited or
-removed, and the 500-entry cap holds. No model or network is involved, and
+removed, and the 500-entry cap holds. A save that added something says so on
+the live text plate beside the HUD for 6 s ("Added Raunak to Vocabulary",
+or "Added 3 terms to Vocabulary"), with an Undo, the plate's one click
+region; it never takes focus, live words take the plate back from it, and a
+new capture or the lab turning off dismisses it. Undo removes, in the same
+locked `AppSettings::edit`, only the entries this save added that are still
+exactly as added; one edited or removed since is left alone
+(`corrections::Learned::undo`). No model or network is involved, and
 the text is never logged: only the outcome and the count of terms added. Off,
 nothing reads Accessibility and no thread starts. Windows and Linux have no
 Accessibility text reader, so the lab is macOS only. Checks:

@@ -84,13 +84,46 @@ pub(crate) fn learn(
     Outcome::Learned(terms)
 }
 
+/// The entries one correction added, as it added them, for its Undo.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Learned(Vec<VocabularyEntry>);
+
+impl Learned {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(crate) fn terms(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.0.iter().map(|entry| entry.term.as_str())
+    }
+
+    /// Takes these entries back out of `vocabulary` where it still holds
+    /// them exactly as added; one the user has since changed or removed is
+    /// left as they left it. Returns how many it removed.
+    pub(crate) fn undo(&self, vocabulary: &mut Vec<VocabularyEntry>) -> usize {
+        let before = vocabulary.len();
+        for added in &self.0 {
+            if let Some(index) = vocabulary.iter().position(|entry| entry == added) {
+                vocabulary.remove(index);
+            }
+        }
+        before - vocabulary.len()
+    }
+}
+
 /// Adds learned `terms` to `vocabulary`, skipping any it has in any case
-/// and any past its 500-entry cap. Returns how many it added.
-pub(crate) fn add_learned(vocabulary: &mut Vec<VocabularyEntry>, terms: &[String]) -> usize {
-    terms
-        .iter()
-        .filter(|term| vocabulary::add(vocabulary, term, &[]) == Ok(true))
-        .count()
+/// and any past its 500-entry cap. Returns what it added.
+pub(crate) fn add_learned(vocabulary: &mut Vec<VocabularyEntry>, terms: &[String]) -> Learned {
+    Learned(
+        terms
+            .iter()
+            .filter_map(|term| {
+                (vocabulary::add(vocabulary, term, &[]) == Ok(true))
+                    .then(|| vocabulary.last().cloned())
+                    .flatten()
+            })
+            .collect(),
+    )
 }
 
 /// Where a dictation landed in a field: the field's text before and after
@@ -669,12 +702,41 @@ mod tests {
     fn learned_terms_join_the_list_once_and_stop_at_its_cap() {
         let mut list = vec![entry("raunak")];
         let terms = ["Raunak".to_string(), "Zed".into(), "Zed".into()];
-        assert_eq!(add_learned(&mut list, &terms), 1);
+        assert_eq!(
+            add_learned(&mut list, &terms).terms().collect::<Vec<_>>(),
+            ["Zed"]
+        );
         assert_eq!(list, [entry("raunak"), entry("Zed")]);
         let mut full: Vec<_> = (0..vocabulary::MAX_ENTRIES)
             .map(|index| entry(&format!("Term{index}")))
             .collect();
-        assert_eq!(add_learned(&mut full, &terms), 0);
+        assert!(add_learned(&mut full, &terms).is_empty());
         assert_eq!(full.len(), vocabulary::MAX_ENTRIES);
+    }
+
+    #[test]
+    fn undo_takes_back_only_what_the_correction_added() {
+        let mut list = vec![entry("OpenCode")];
+        let learned = add_learned(&mut list, &["Raunak".to_string(), "Zed".into()]);
+        assert_eq!(learned.terms().len(), 2);
+        assert_eq!(learned.undo(&mut list), 2);
+        assert_eq!(list, [entry("OpenCode")]);
+        assert_eq!(learned.undo(&mut list), 0, "a second Undo changes nothing");
+    }
+
+    #[test]
+    fn undo_leaves_a_term_edited_or_removed_since() {
+        let mut list = vec![entry("OpenCode")];
+        let learned = add_learned(
+            &mut list,
+            &["Raunak".to_string(), "Zed".into(), "Priya".into()],
+        );
+        // In the Vocabulary pane: a respelling, a "sounds like", a removal.
+        list[1].term = "RAUNAK".into();
+        list[2].sounds_like = vec!["said".into()];
+        vocabulary::remove(&mut list, "Priya");
+        let edited = list.clone();
+        assert_eq!(learned.undo(&mut list), 0);
+        assert_eq!(list, edited);
     }
 }

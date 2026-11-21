@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{Anchor, Outcome, add_learned, anchor, edited_region, learn};
+use super::{Anchor, Learned, Outcome, add_learned, anchor, edited_region, learn};
 use crate::accessibility::WatchedField;
 use crate::app_settings::AppSettings;
 use crate::dictation::vocabulary;
@@ -174,17 +174,19 @@ fn follow(epoch: u64, field: &impl Field, inserted: &str, save: impl FnOnce(&[St
     };
     let watching = || current() && field.in_front() && field.has_focus();
     let mut outcome = Outcome::Unchanged;
-    while started.elapsed() < LONGEST_WATCH && watching() {
+    while started.elapsed() < LONGEST_WATCH {
         thread::sleep(POLL);
-        let Some(text) = field.text().filter(|text| !text.trim().is_empty()) else {
-            break;
-        };
-        // Read before checking: a read that started after a newer paste, a
-        // Return, a capture, or a switch to another app could already hold
-        // what they did.
+        let text = field.text();
+        // A read counts only if the watch still stands once it returns:
+        // whatever ended it (a newer paste, a Return, a capture, another
+        // app in front) may have happened at any point before, the read
+        // included, so its text could hold what they did.
         if !watching() {
             break;
         }
+        let Some(text) = text.filter(|text| !text.trim().is_empty()) else {
+            break;
+        };
         if text != last {
             outcome = taught(&anchor, inserted, &text);
             let terms = match &outcome {
@@ -217,23 +219,49 @@ fn taught(anchor: &Anchor, inserted: &str, field: &str) -> Outcome {
 }
 
 /// Adds `terms` to the vocabulary as saved right now, as `hex vocabulary
-/// add` would, then has the app reload its settings. Existing entries are
-/// never touched.
+/// add` would, has the app reload its settings, and says what it added
+/// beside the HUD with an Undo. Existing entries are never touched.
 fn save(terms: &[String]) {
-    let mut added = 0;
+    let mut learned = Learned::default();
     let saved = AppSettings::edit(|settings| {
-        added = add_learned(&mut settings.vocabulary, terms);
-        added > 0
+        learned = add_learned(&mut settings.vocabulary, terms);
+        !learned.is_empty()
     });
     match saved {
         Ok(Some(_)) => {
-            if let Some(runtime) = crate::macos_rune::runtime() {
-                let _ = runtime.send(crate::macos_rune::Request::ReloadSettings);
-            }
-            tracing::info!(added, "learned vocabulary from a correction");
+            reload_settings();
+            tracing::info!(
+                added = learned.terms().len(),
+                "learned vocabulary from a correction"
+            );
+            crate::rune_ui::live_text::show_learned(learned, undo);
         }
         Ok(None) => tracing::debug!("learned vocabulary was already saved"),
         Err(error) => tracing::warn!(%error, "could not save learned vocabulary"),
+    }
+}
+
+/// The notice's Undo: takes `learned` back out of the vocabulary as saved
+/// right now, under the same lock as its save, leaving any entry edited or
+/// removed since.
+fn undo(learned: &Learned) {
+    let mut removed = 0;
+    match AppSettings::edit(|settings| {
+        removed = learned.undo(&mut settings.vocabulary);
+        removed > 0
+    }) {
+        Ok(Some(_)) => {
+            reload_settings();
+            tracing::info!(removed, "undid learned vocabulary");
+        }
+        Ok(None) => tracing::debug!("learned vocabulary was already changed or removed"),
+        Err(error) => tracing::warn!(%error, "could not undo learned vocabulary"),
+    }
+}
+
+fn reload_settings() {
+    if let Some(runtime) = crate::macos_rune::runtime() {
+        let _ = runtime.send(crate::macos_rune::Request::ReloadSettings);
     }
 }
 
@@ -264,11 +292,13 @@ mod tests {
     const ELSEWHERE: &str = "Sent";
 
     /// A field whose reads come from `read`, called with each read's number
-    /// from 1; the app stays in front until `front` turns off.
+    /// from 1; the app stays in front until `front` turns off, or until the
+    /// check that follows read `leave_after` has seen it in front.
     struct Scripted<F> {
         read: RefCell<F>,
         count: Cell<usize>,
         front: Cell<bool>,
+        leave_after: Option<usize>,
     }
 
     impl<F: FnMut(usize, &Cell<bool>) -> Option<String>> Field for Scripted<F> {
@@ -286,7 +316,11 @@ mod tests {
         }
 
         fn in_front(&self) -> bool {
-            self.front.get()
+            let front = self.front.get();
+            if self.leave_after == Some(self.count.get()) {
+                self.front.set(false);
+            }
+            front
         }
     }
 
@@ -299,10 +333,20 @@ mod tests {
 
     /// What a watch of [`INSERTED`] saves, its field read by `read`.
     fn saved(read: impl FnMut(usize, &Cell<bool>) -> Option<String>) -> Option<Vec<String>> {
+        saved_leaving(None, read)
+    }
+
+    /// [`saved`], with the app leaving the front right after the check that
+    /// follows read `leave_after`.
+    fn saved_leaving(
+        leave_after: Option<usize>,
+        read: impl FnMut(usize, &Cell<bool>) -> Option<String>,
+    ) -> Option<Vec<String>> {
         let field = Scripted {
             read: RefCell::new(read),
             count: Cell::new(0),
             front: Cell::new(true),
+            leave_after,
         };
         let mut saved = None;
         follow(begin().0, &field, INSERTED, |terms| {
@@ -327,19 +371,27 @@ mod tests {
     fn switching_apps_ends_the_watch_with_the_correction() {
         let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
         lab(true);
-        let saved = saved(|read, front| match read {
+        // The switch lands after the check that passed read 2 and before
+        // read 3 is taken: the gap between one poll's check and the next.
+        let saved = saved_leaving(Some(2), |read, front| match read {
             1 => Some(FIELD.into()),
             2 => Some(CORRECTED.into()),
-            // The switch lands between the check before this read and the
-            // read itself.
             3 => {
-                front.set(false);
+                assert!(!front.get(), "read 3 is taken after the switch");
                 Some(ELSEWHERE.into())
             }
             4 => panic!("the field is read after its app left the front"),
             _ => None,
         });
         assert_eq!(saved, Some(vec!["Raunak".into()]));
+    }
+
+    #[test]
+    fn an_unchanged_dictation_saves_nothing() {
+        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        lab(true);
+        let saved = saved(|read, _| (read < 4).then(|| FIELD.into()));
+        assert_eq!(saved, None, "no save, so no notice");
     }
 
     #[test]

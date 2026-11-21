@@ -106,7 +106,7 @@ fn a_learned_vocabulary_edit_keeps_vocabulary_edits_saved_since_learning_began()
         .update_at(&manual, &file.path, Policy::default())
         .unwrap();
     let saved = AppSettings::edit_at(&file.path, Policy::default(), |settings| {
-        crate::dictation::corrections::add_learned(&mut settings.vocabulary, &terms) > 0
+        !crate::dictation::corrections::add_learned(&mut settings.vocabulary, &terms).is_empty()
     })
     .unwrap()
     .expect("Raunak is new");

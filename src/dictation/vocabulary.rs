@@ -402,7 +402,7 @@ pub(crate) fn add_unsaved(terms: &[String]) {
         .get_or_init(Default::default)
         .write()
         .unwrap_or_else(|error| error.into_inner());
-    crate::dictation::corrections::add_learned(&mut saved, terms);
+    let _ = crate::dictation::corrections::add_learned(&mut saved, terms);
 }
 
 /// The entries saved in `root/settings.json`, read without loading
