@@ -271,6 +271,7 @@ fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
         after.len()
     };
     let mut changed = vec![false; after.len()];
+    let mut replaced = vec![false; after.len()];
     let (mut i, mut j) = (before.len(), end);
     while i > 0 || (j > 0 && !open.start) {
         let here = cost[i * columns + j];
@@ -278,6 +279,7 @@ fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
             let substitute = usize::from(before[i - 1].bare != after[j - 1].bare);
             if here == cost[(i - 1) * columns + j - 1] + substitute {
                 changed[j - 1] = substitute == 1;
+                replaced[j - 1] = substitute == 1;
                 i -= 1;
                 j -= 1;
                 continue;
@@ -290,25 +292,43 @@ fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
             i -= 1;
         }
     }
-    // A name typed over the dictation's last word can run on past where it
-    // stopped ("ronak" -> "Raunak Chowdhuri"): its unbroken name-shaped
-    // words belong to the correction, up to a phrase's length.
+    // A name typed over dictated words can take more words than it replaced
+    // ("ronak" -> "Raunak Chowdhuri"): up to a phrase's length, the extra
+    // words are the name, not more edits. Past an open end, a name typed
+    // over the last word runs on past where the dictation stopped.
+    let mut forgiven = 0;
     let mut extra = 0;
-    while open.end
-        && end + extra < after.len()
-        && end + extra > 0
-        && changed[end + extra - 1]
-        && extra + 1 < MAX_PHRASE_WORDS
-        && after[end + extra - 1]
-            .raw
-            .ends_with(after[end + extra - 1].bare)
-        && !after[end + extra].after_mark
-        && after[end + extra].raw.starts_with(after[end + extra].bare)
-        && looks_like_name(after[end + extra].bare)
-    {
-        changed[end + extra] = true;
-        extra += 1;
+    let mut phrase = NamePhrase::default();
+    for index in 0..after.len() {
+        let word = &after[index];
+        let continues = phrase.words > 0
+            && phrase.words < MAX_PHRASE_WORDS
+            && joined(&after[index - 1], word)
+            && looks_like_name(word.bare);
+        if index >= end {
+            if !(open.end && continues && phrase.replaced > 0) {
+                break;
+            }
+            changed[index] = true;
+            extra += 1;
+            phrase.words += 1;
+        } else if changed[index] && looks_like_name(word.bare) {
+            if !continues {
+                forgiven += phrase.forgiven();
+                phrase = NamePhrase::default();
+            }
+            phrase.words += 1;
+            if replaced[index] {
+                phrase.replaced += 1;
+            } else {
+                phrase.inserted += 1;
+            }
+        } else {
+            forgiven += phrase.forgiven();
+            phrase = NamePhrase::default();
+        }
     }
+    forgiven += phrase.forgiven();
     let mut added = Vec::new();
     let mut start = None;
     for (index, &is_changed) in changed.iter().chain([&false]).enumerate() {
@@ -324,8 +344,29 @@ fn diff(before: &[Word], after: &[Word], open: Open) -> Diff {
     let longest = before.len().max(end + extra - j).max(1);
     Diff {
         added,
-        distance: (cost[last + end] + extra) as f32 / longest as f32,
+        distance: (cost[last + end] - forgiven) as f32 / longest as f32,
     }
+}
+
+/// Adjacent changed name-shaped words in the edited text, and how many of
+/// them replaced a dictated word or were inserted.
+#[derive(Default)]
+struct NamePhrase {
+    words: usize,
+    replaced: usize,
+    inserted: usize,
+}
+
+impl NamePhrase {
+    /// The inserted words a name that replaced dictated words took on.
+    fn forgiven(&self) -> usize {
+        if self.replaced > 0 { self.inserted } else { 0 }
+    }
+}
+
+/// Whether `next` follows `word` in one phrase, no punctuation between.
+fn joined(word: &Word, next: &Word) -> bool {
+    word.raw.ends_with(word.bare) && !next.after_mark && next.raw.starts_with(next.bare)
 }
 
 /// The terms in one run of edited words: each stretch of up to
@@ -657,6 +698,49 @@ mod tests {
             ),
             ["Raunak Chowdhuri"],
             "and drafting typed after that full name"
+        );
+    }
+
+    #[test]
+    fn a_name_runs_on_only_from_a_name_typed_over_the_last_word() {
+        let field = "Hi team, send this to ryan";
+        assert_eq!(
+            learned_in_field(
+                field,
+                "send this to ryan",
+                "Hi team, send this to him Monday"
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_name_running_on_stops_at_a_phrase_counting_its_corrected_words() {
+        let field = "Notes: send the deck to jean luc";
+        assert_eq!(
+            learned_in_field(
+                field,
+                "send the deck to jean luc",
+                "Notes: send the deck to Jean Luc Picard Monday"
+            ),
+            ["Jean Luc Picard"]
+        );
+    }
+
+    #[test]
+    fn a_longer_name_typed_over_a_short_dictation_is_a_correction() {
+        assert_eq!(
+            learned("ask ronak", "ask Raunak Chowdhuri"),
+            ["Raunak Chowdhuri"]
+        );
+        assert_eq!(
+            learned_in_field(
+                "Hi team, ask ronak",
+                "ask ronak",
+                "Hi team, ask Raunak Chowdhuri"
+            ),
+            ["Raunak Chowdhuri"],
+            "and at the end of the field"
         );
     }
 
