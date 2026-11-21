@@ -238,7 +238,21 @@ fn follow(epoch: u64, field: &impl Field, inserted: &str, save: impl FnOnce(&[St
     // A press heard terms this watch may since have dropped (a correction
     // reverted, the lab turned off): only what was saved stays.
     if UNSAVED.swap(false, Ordering::AcqRel) {
-        vocabulary::drop_unsaved();
+        drop_unsaved();
+    }
+}
+
+/// Puts the vocabulary in memory back to the one saved, dropping any terms
+/// a press added that were never saved. It reads and applies under the
+/// settings writer lock, as every save publishes, so no newer save can land
+/// between the two; it never writes. Unreadable settings leave memory as is.
+fn drop_unsaved() {
+    let reread = AppSettings::edit(|settings| {
+        vocabulary::apply(&settings.vocabulary, settings.vocabulary_boost);
+        false
+    });
+    if let Err(error) = reread {
+        tracing::warn!(%error, "could not reread the vocabulary");
     }
 }
 

@@ -386,11 +386,22 @@ pub(crate) fn fold_hints(list: &mut Vec<VocabularyEntry>, hints: &str) -> bool {
 
 /// Called by `AppSettings` whenever settings load or save.
 pub(crate) fn apply(entries: &[VocabularyEntry], boost: VocabularyBoost) {
-    *SAVED
-        .get_or_init(Default::default)
-        .write()
-        .unwrap_or_else(|error| error.into_inner()) = entries.to_vec();
+    let changed = {
+        let mut saved = SAVED
+            .get_or_init(Default::default)
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        let changed = *saved != entries;
+        *saved = entries.to_vec();
+        changed
+    };
     BOOST.store(boost as u8, Ordering::Relaxed);
+    // Labs › Learn from corrections: the list changed since its notice
+    // showed, so its Undo would act on entries the user may have remade
+    // (a term removed and added again reads the same).
+    if changed {
+        crate::rune_ui::live_text::dismiss_learned();
+    }
 }
 
 /// Adds `terms` to the applied entries ahead of their save, which applies
@@ -403,25 +414,6 @@ pub(crate) fn add_unsaved(terms: &[String]) {
         .write()
         .unwrap_or_else(|error| error.into_inner());
     let _ = crate::dictation::corrections::add_learned(&mut saved, terms);
-}
-
-/// Puts the applied entries back to the vocabulary as saved, dropping any
-/// [`add_unsaved`] added that were never saved. Leaves them as they are
-/// when the settings can't be read.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn drop_unsaved() {
-    let read = crate::app_paths::support_dir()
-        .map_err(|error| error.to_string())
-        .and_then(|root| read_from(&root.join("settings.json")));
-    match read {
-        Ok(entries) => {
-            *SAVED
-                .get_or_init(Default::default)
-                .write()
-                .unwrap_or_else(|error| error.into_inner()) = entries;
-        }
-        Err(error) => tracing::warn!(%error, "could not reread the vocabulary"),
-    }
 }
 
 /// The entries saved in `root/settings.json`, read without loading

@@ -603,12 +603,13 @@ the live text plate beside the HUD for 6 s ("Added Raunak to Vocabulary",
 or "Added 3 terms to Vocabulary"), with an Undo, the plate's one click
 region; it never takes focus, live words take the plate back from it, and a
 new capture or the lab turning off, from the card or `hex settings set`,
-dismisses it. Undo removes, in the same locked `AppSettings::edit`, the
-entries this save added, but only if the saved vocabulary is still exactly as
-this save left it; any vocabulary edit in between (a respelling, a removal, a
-term removed and added again, an unrelated term) makes Undo a no-op, and so
-does the lab being off (`corrections::Learned::undo`). For a 6 s notice this
-is the simplest rule that never removes an entry the user made. No model or network is involved, and
+dismisses it, and so does any change to the vocabulary after its save (a
+respelling, a removal, a term removed and added again, an unrelated term):
+once the notice is gone, Undo does nothing. Undo removes, in the same locked
+`AppSettings::edit`, the entries this save added, and only if the saved
+vocabulary is still exactly as this save left it
+(`corrections::Learned::undo`). For a 6 s notice this is the simplest rule
+that never removes an entry the user made. No model or network is involved, and
 the text is never logged: only the outcome and the count of terms added. Off,
 nothing reads Accessibility and no thread starts. Windows and Linux have no
 Accessibility text reader, so the lab is macOS only. Checks:

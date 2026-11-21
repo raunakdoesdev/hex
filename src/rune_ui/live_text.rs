@@ -536,14 +536,15 @@ fn learned_line(p: &Paint, learned: &Learned) -> El {
         .child(undo)
 }
 
-/// Runs the learned notice's Undo once, unless its lab was turned off
-/// since, and the notice leaves.
+/// Runs the learned notice's Undo once, and the notice leaves. Nothing runs
+/// once the notice was dismissed and its leaving is still queued: the lab
+/// turned off, or the vocabulary changed since.
 fn undo_pressed(plate: &mut Plate) {
     let Some(Notice::Learned(learned, undo)) = plate.notice.take() else {
         return;
     };
-    notice().dismiss(|notice| !notice.is_failure());
-    if crate::labs::learn_from_corrections() {
+    let still_showing = notice().dismiss(|notice| !notice.is_failure());
+    if still_showing && crate::labs::learn_from_corrections() {
         undo(&learned);
     }
     if plate.should_hide() && plate.shown {
@@ -915,14 +916,16 @@ mod tests {
         static UNDONE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         lab(true);
         let terms = ["Raunak".to_string()];
+        let shown = Notice::Learned(
+            crate::dictation::corrections::add_learned(&mut Vec::new(), &terms),
+            |learned| {
+                assert_eq!(learned.terms().collect::<Vec<_>>(), ["Raunak"]);
+                UNDONE.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        notice().show(shown.clone(), Instant::now());
         let mut plate = Plate {
-            notice: Some(Notice::Learned(
-                crate::dictation::corrections::add_learned(&mut Vec::new(), &terms),
-                |learned| {
-                    assert_eq!(learned.terms().collect::<Vec<_>>(), ["Raunak"]);
-                    UNDONE.fetch_add(1, Ordering::SeqCst);
-                },
-            )),
+            notice: Some(shown),
             ..Plate::default()
         };
         undo_pressed(&mut plate);
@@ -931,6 +934,35 @@ mod tests {
         assert_eq!(UNDONE.load(Ordering::SeqCst), 1);
         assert!(plate.notice.is_none());
         assert!(plate.should_hide());
+    }
+
+    #[test]
+    fn undo_does_nothing_once_its_term_was_removed_and_added_again() {
+        use crate::dictation::vocabulary::{self, VocabularyBoost, VocabularyEntry};
+        let entry = |term: &str| VocabularyEntry {
+            term: term.into(),
+            sounds_like: Vec::new(),
+        };
+        lab(true);
+        let mut list = vec![entry("OpenCode")];
+        let shown = Notice::Learned(
+            crate::dictation::corrections::add_learned(&mut list, &["Raunak".into()]),
+            |_| panic!("Undo removed the user's own Raunak"),
+        );
+        vocabulary::apply(&list, VocabularyBoost::Normal);
+        notice().show(shown.clone(), Instant::now());
+        let mut plate = Plate {
+            notice: Some(shown),
+            ..Plate::default()
+        };
+        // In the Vocabulary pane, or `hex vocabulary remove` then `add`:
+        // each save applies the list, and the last one reads as the first.
+        vocabulary::apply(&[entry("OpenCode")], VocabularyBoost::Normal);
+        vocabulary::apply(&list, VocabularyBoost::Normal);
+        assert!(notice().message.is_none(), "the notice leaves");
+        undo_pressed(&mut plate);
+        vocabulary::apply(&[], VocabularyBoost::Normal);
+        lab(false);
     }
 
     #[test]
