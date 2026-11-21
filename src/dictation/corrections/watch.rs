@@ -328,9 +328,6 @@ mod tests {
     use crate::app_settings::LabsSettings;
     use std::cell::{Cell, RefCell};
 
-    /// The watch state and the lab switch are process-wide.
-    static SERIAL: Mutex<()> = Mutex::new(());
-
     const INSERTED: &str = "send the deck to ronak today";
     const FIELD: &str = "Hi team, send the deck to ronak today. Thanks";
     const CORRECTED: &str = "Hi team, send the deck to Raunak today. Thanks";
@@ -413,7 +410,7 @@ mod tests {
 
     #[test]
     fn a_correction_is_saved_once_the_field_goes_away() {
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = crate::dictation::corrections::test_state();
         lab(true);
         let saved = saved(|read, _| match read {
             1 => Some(FIELD.into()),
@@ -425,7 +422,7 @@ mod tests {
 
     #[test]
     fn switching_apps_ends_the_watch_with_the_correction() {
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = crate::dictation::corrections::test_state();
         lab(true);
         // The switch lands after the check that passed read 2 and before
         // read 3 is taken: the gap between one poll's check and the next.
@@ -444,7 +441,7 @@ mod tests {
 
     #[test]
     fn an_unchanged_dictation_saves_nothing() {
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = crate::dictation::corrections::test_state();
         lab(true);
         let saved = saved(|read, _| (read < 4).then(|| FIELD.into()));
         assert_eq!(saved, None, "no save, so no notice");
@@ -452,7 +449,7 @@ mod tests {
 
     #[test]
     fn turning_the_lab_off_mid_watch_saves_nothing() {
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = crate::dictation::corrections::test_state();
         lab(true);
         let saved = saved(|read, _| match read {
             1 => Some(FIELD.into()),
@@ -470,7 +467,7 @@ mod tests {
 
     #[test]
     fn a_return_hex_presses_ends_the_watch() {
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = crate::dictation::corrections::test_state();
         lab(true);
         let saved = saved(|read, _| match read {
             1 => Some(FIELD.into()),
@@ -487,7 +484,7 @@ mod tests {
 
     #[test]
     fn the_next_dictation_hears_a_correction_before_it_is_saved() {
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = crate::dictation::corrections::test_state();
         lab(true);
         vocabulary::apply(&[], vocabulary::VocabularyBoost::Normal);
         let mut heard = Vec::new();
@@ -515,7 +512,7 @@ mod tests {
 
     #[test]
     fn a_press_that_never_becomes_a_capture_keeps_the_watch() {
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = crate::dictation::corrections::test_state();
         lab(true);
         // Option–Left on the way to the misspelling: the press is a chord.
         let saved = saved(|read, _| match read {
@@ -532,7 +529,7 @@ mod tests {
 
     #[test]
     fn presses_during_one_watch_add_at_most_five_terms_in_memory() {
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = crate::dictation::corrections::test_state();
         lab(true);
         vocabulary::apply(&[], vocabulary::VocabularyBoost::Normal);
         let inserted = "ping ann bob cat dan eve fay about the plan for the launch";
@@ -560,7 +557,7 @@ mod tests {
 
     #[test]
     fn a_correction_reverted_after_a_press_leaves_no_term_in_memory() {
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = crate::dictation::corrections::test_state();
         lab(true);
         vocabulary::apply(&[], vocabulary::VocabularyBoost::Normal);
         let mut heard = Vec::new();
@@ -585,7 +582,7 @@ mod tests {
 
     #[test]
     fn a_correction_heard_on_a_chord_is_still_saved_after_a_later_edit() {
-        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = crate::dictation::corrections::test_state();
         lab(true);
         vocabulary::apply(&[], vocabulary::VocabularyBoost::Normal);
         // Option–Right past the fixed name, then a word typed at the end.

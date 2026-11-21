@@ -12,6 +12,15 @@ pub(crate) mod watch;
 
 use crate::dictation::vocabulary::{self, VocabularyEntry};
 
+/// Held by every test that changes process-wide state this feature reads:
+/// the lab switch, the watch, the runtime vocabulary, the learned notice.
+/// `cargo test` runs tests as threads of one process.
+#[cfg(test)]
+pub(crate) fn test_state() -> std::sync::MutexGuard<'static, ()> {
+    static STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    STATE.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 /// Longest dictation or edited text compared, in words.
 const MAX_WORDS: usize = 400;
 /// Above this share of words changed, the edit is a rewrite, not a

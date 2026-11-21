@@ -913,6 +913,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn undo_runs_once_and_the_notice_leaves() {
+        let _shared = crate::dictation::corrections::test_state();
         static UNDONE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         lab(true);
         let terms = ["Raunak".to_string()];
@@ -938,6 +939,7 @@ mod tests {
 
     #[test]
     fn undo_does_nothing_once_its_term_was_removed_and_added_again() {
+        let _shared = crate::dictation::corrections::test_state();
         use crate::dictation::vocabulary::{self, VocabularyBoost, VocabularyEntry};
         let entry = |term: &str| VocabularyEntry {
             term: term.into(),
@@ -967,6 +969,7 @@ mod tests {
 
     #[test]
     fn undo_does_nothing_once_its_lab_is_off() {
+        let _shared = crate::dictation::corrections::test_state();
         lab(false);
         let mut plate = Plate {
             notice: Some(Notice::Learned(
@@ -981,6 +984,7 @@ mod tests {
 
     #[test]
     fn turning_the_lab_off_anywhere_dismisses_a_learned_notice() {
+        let _shared = crate::dictation::corrections::test_state();
         notice().show(learned(&["Raunak"]), Instant::now());
         // As `hex settings set labs.learn_from_corrections false` saves it.
         lab(false);
