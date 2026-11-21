@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use super::{Anchor, Learned, Outcome, add_learned, anchor, edited_region, learn};
 use crate::accessibility::WatchedField;
 use crate::app_settings::AppSettings;
-use crate::dictation::vocabulary;
+use crate::dictation::vocabulary::{self, VocabularyEntry};
 
 const POLL: Duration = Duration::from_millis(100);
 const LONGEST_WATCH: Duration = Duration::from_secs(5 * 60);
@@ -160,6 +160,9 @@ impl Field for WatchedField {
 fn follow(epoch: u64, field: &impl Field, inserted: &str, save: impl FnOnce(&[String])) {
     let current =
         || EPOCH.load(Ordering::Acquire) == epoch && crate::labs::learn_from_corrections();
+    // What was known before this watch: a chord press adds the watch's own
+    // unsaved terms to the vocabulary in memory, and those still need saving.
+    let known = vocabulary::entries();
     let started = Instant::now();
     let (anchor, mut last) = loop {
         if !current() || started.elapsed() > ARRIVAL {
@@ -188,7 +191,7 @@ fn follow(epoch: u64, field: &impl Field, inserted: &str, save: impl FnOnce(&[St
             break;
         };
         if text != last {
-            outcome = taught(&anchor, inserted, &text);
+            outcome = taught(&anchor, inserted, &text, &known);
             let terms = match &outcome {
                 Outcome::Learned(terms) => terms.as_slice(),
                 _ => &[],
@@ -210,10 +213,11 @@ fn follow(epoch: u64, field: &impl Field, inserted: &str, save: impl FnOnce(&[St
     }
 }
 
-/// What `field` teaches about the dictation `anchor` found in it.
-fn taught(anchor: &Anchor, inserted: &str, field: &str) -> Outcome {
+/// What `field` teaches about the dictation `anchor` found in it, beyond
+/// the `known` vocabulary.
+fn taught(anchor: &Anchor, inserted: &str, field: &str, known: &[VocabularyEntry]) -> Outcome {
     match edited_region(anchor, field) {
-        Some(edited) => learn(inserted, edited, anchor.open(), &vocabulary::entries()),
+        Some(edited) => learn(inserted, edited, anchor.open(), known),
         None => Outcome::Outside,
     }
 }
@@ -472,5 +476,28 @@ mod tests {
             _ => None,
         });
         assert_eq!(saved, Some(vec!["Raunak".into()]));
+    }
+
+    #[test]
+    fn a_correction_heard_on_a_chord_is_still_saved_after_a_later_edit() {
+        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        lab(true);
+        vocabulary::apply(&[], vocabulary::VocabularyBoost::Normal);
+        // Option–Right past the fixed name, then a word typed at the end.
+        let saved = saved(|read, _| match read {
+            1 => Some(FIELD.into()),
+            2 => Some(CORRECTED.into()),
+            3 => {
+                dictation_pressed();
+                Some("Hi team, send the deck to Raunak today please. Thanks".into())
+            }
+            _ => None,
+        });
+        vocabulary::apply(&[], vocabulary::VocabularyBoost::Normal);
+        assert_eq!(
+            saved,
+            Some(vec!["Raunak".into()]),
+            "saved, so the notice shows"
+        );
     }
 }
