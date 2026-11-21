@@ -267,6 +267,7 @@ impl Paster {
         mode: PasteMode,
         target: Option<&dyn Fn() -> bool>,
     ) -> Result<()> {
+        let insertion = crate::dictation::corrections::watch::begin();
         let revision = self.activity.revision();
         let joinable = !matches!(mode, PasteMode::Standalone);
         let text = self
@@ -295,6 +296,7 @@ impl Paster {
             Some(_) => return Err(eyre!("paste target changed")),
             None => self.paste_through_clipboard(&text, joinable, focused)?,
         }
+        insertion.watch(crate::dictation::context::frontmost_pid(), &text);
         self.continuation.record(revision, joinable, text);
         Ok(())
     }

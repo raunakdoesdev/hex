@@ -130,6 +130,42 @@ impl PasteFocus {
     }
 }
 
+/// Longest field Labs › Learn from corrections follows, in UTF-16 units.
+const MAX_WATCHED_CHARS: usize = 16 * 1024;
+
+/// The text element focused when a dictation landed, for Labs › Learn from
+/// corrections to read again while the user edits it. Never a password
+/// field, and never Hex's own.
+pub(crate) struct WatchedField {
+    application: CfObject,
+    field: CfObject,
+}
+
+impl WatchedField {
+    pub(crate) fn focused(pid: i32) -> Option<Self> {
+        let application = foreign_application(pid)?;
+        let field = copy_element(&application, c"AXFocusedUIElement")?;
+        if is_secure_text_field(&field) {
+            return None;
+        }
+        Some(Self { application, field })
+    }
+
+    /// Whether the app still has this element focused.
+    pub(crate) fn has_focus(&self) -> bool {
+        copy_element(&self.application, c"AXFocusedUIElement").is_some_and(|now| {
+            // SAFETY: both references are retained AXUIElements.
+            unsafe { CFEqual(now.0, self.field.0) != 0 }
+        })
+    }
+
+    /// The element's whole value, or `None` when it is gone, holds no text,
+    /// or is longer than [`MAX_WATCHED_CHARS`].
+    pub(crate) fn text(&self) -> Option<String> {
+        copy_string_capped(&self.field, c"AXValue", MAX_WATCHED_CHARS)
+    }
+}
+
 /// How much of a focused window Labs › Words on screen reads: elements
 /// walked, depth below the window, bytes collected, characters per value,
 /// and wall-clock time.
