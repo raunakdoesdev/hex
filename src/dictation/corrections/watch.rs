@@ -10,11 +10,11 @@
 //! Nothing here logs the text.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{Anchor, Learned, Outcome, add_learned, anchor, edited_region, learn};
+use super::{Anchor, Learned, MAX_TERMS, Outcome, add_learned, anchor, edited_region, learn};
 use crate::accessibility::WatchedField;
 use crate::app_settings::AppSettings;
 use crate::dictation::vocabulary::{self, VocabularyEntry};
@@ -34,11 +34,19 @@ static EPOCH: AtomicU64 = AtomicU64::new(0);
 static PENDING: Mutex<Pending> = Mutex::new(Pending {
     epoch: 0,
     terms: Vec::new(),
+    heard: Vec::new(),
 });
+
+/// Whether a press added terms to the vocabulary in memory that the next
+/// watch to end must drop again unless they were saved.
+static UNSAVED: AtomicBool = AtomicBool::new(false);
 
 struct Pending {
     epoch: u64,
     terms: Vec<String>,
+    /// What this watch's presses already added in memory, at most
+    /// [`MAX_TERMS`] across all of them.
+    heard: Vec<String>,
 }
 
 /// One insertion, claimed before its paste is posted.
@@ -77,14 +85,28 @@ pub(crate) fn note_return() {
 /// settings.
 pub(crate) fn dictation_pressed() {
     let terms = {
-        let pending = PENDING.lock().unwrap_or_else(|error| error.into_inner());
-        if pending.epoch == EPOCH.load(Ordering::Acquire) {
-            pending.terms.clone()
-        } else {
-            Vec::new()
+        let mut pending = PENDING.lock().unwrap_or_else(|error| error.into_inner());
+        if pending.epoch != EPOCH.load(Ordering::Acquire) {
+            return;
         }
+        let room = MAX_TERMS.saturating_sub(pending.heard.len());
+        let terms: Vec<String> = pending
+            .terms
+            .iter()
+            .filter(|term| {
+                !pending
+                    .heard
+                    .iter()
+                    .any(|kept| vocabulary::same(kept, term))
+            })
+            .take(room)
+            .cloned()
+            .collect();
+        pending.heard.extend(terms.iter().cloned());
+        terms
     };
     if !terms.is_empty() && crate::labs::learn_from_corrections() {
+        UNSAVED.store(true, Ordering::Release);
         vocabulary::add_unsaved(&terms);
     }
 }
@@ -102,6 +124,9 @@ pub(crate) fn capture_intended() {
 fn publish(epoch: u64, terms: &[String]) {
     let mut pending = PENDING.lock().unwrap_or_else(|error| error.into_inner());
     if EPOCH.load(Ordering::Acquire) == epoch {
+        if pending.epoch != epoch {
+            pending.heard.clear();
+        }
         pending.epoch = epoch;
         pending.terms = terms.to_vec();
     }
@@ -201,15 +226,19 @@ fn follow(epoch: u64, field: &impl Field, inserted: &str, save: impl FnOnce(&[St
         }
     }
     publish(epoch, &[]);
-    if !crate::labs::learn_from_corrections() {
-        return;
+    if crate::labs::learn_from_corrections() {
+        match outcome {
+            Outcome::Learned(terms) if !terms.is_empty() => save(&terms),
+            outcome => tracing::debug!(
+                outcome = outcome_name(&outcome),
+                "correction watch learned nothing"
+            ),
+        }
     }
-    match outcome {
-        Outcome::Learned(terms) if !terms.is_empty() => save(&terms),
-        outcome => tracing::debug!(
-            outcome = outcome_name(&outcome),
-            "correction watch learned nothing"
-        ),
+    // A press heard terms this watch may since have dropped (a correction
+    // reverted, the lab turned off): only what was saved stays.
+    if UNSAVED.swap(false, Ordering::AcqRel) {
+        vocabulary::drop_unsaved();
     }
 }
 
@@ -329,6 +358,15 @@ mod tests {
     }
 
     fn lab(on: bool) {
+        static ISOLATED: std::sync::Once = std::sync::Once::new();
+        // A watch that heard terms on a press rereads the saved vocabulary
+        // as it ends: an empty folder, not the test build's own.
+        ISOLATED.call_once(|| {
+            let support = std::env::temp_dir().join(format!("hex-watch-{}", std::process::id()));
+            // SAFETY: nextest runs each test in its own process, so no other
+            // test reads the environment meanwhile.
+            unsafe { std::env::set_var("HEX_APPLICATION_SUPPORT_DIR", support) };
+        });
         crate::labs::apply(&LabsSettings {
             learn_from_corrections: on,
             ..LabsSettings::default()
@@ -476,6 +514,59 @@ mod tests {
             _ => None,
         });
         assert_eq!(saved, Some(vec!["Raunak".into()]));
+    }
+
+    #[test]
+    fn presses_during_one_watch_add_at_most_five_terms_in_memory() {
+        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        lab(true);
+        vocabulary::apply(&[], vocabulary::VocabularyBoost::Normal);
+        let inserted = "ping ann bob cat dan eve fay about the plan for the launch";
+        let heard = RefCell::new(Vec::new());
+        let field = Scripted {
+            read: RefCell::new(|read: usize, _: &Cell<bool>| match read {
+                1 => Some(inserted.to_string()),
+                2 => Some("ping Ann, Bob, Cat, Dan, Eve, Fay about the plan for the launch".into()),
+                3 => {
+                    dictation_pressed();
+                    dictation_pressed();
+                    heard.replace(vocabulary::terms());
+                    None
+                }
+                _ => None,
+            }),
+            count: Cell::new(0),
+            front: Cell::new(true),
+            leave_after: None,
+        };
+        follow(begin().0, &field, inserted, |_| {});
+        vocabulary::apply(&[], vocabulary::VocabularyBoost::Normal);
+        assert_eq!(heard.take(), ["Ann", "Bob", "Cat", "Dan", "Eve"]);
+    }
+
+    #[test]
+    fn a_correction_reverted_after_a_press_leaves_no_term_in_memory() {
+        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        lab(true);
+        vocabulary::apply(&[], vocabulary::VocabularyBoost::Normal);
+        let mut heard = Vec::new();
+        // Option–Left on the way to undoing the fix: the press is a chord.
+        let saved = saved(|read, _| match read {
+            1 => Some(FIELD.into()),
+            2 => Some(CORRECTED.into()),
+            3 => {
+                dictation_pressed();
+                heard = vocabulary::terms();
+                Some(FIELD.into())
+            }
+            _ => None,
+        });
+        assert_eq!(heard, ["Raunak"], "heard while the fix stood");
+        assert_eq!(saved, None);
+        assert!(
+            vocabulary::terms().is_empty(),
+            "gone once the watch ends without saving it"
+        );
     }
 
     #[test]

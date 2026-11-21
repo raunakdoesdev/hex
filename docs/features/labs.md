@@ -565,7 +565,11 @@ before audio starts) adds them to the in-memory vocabulary, so the capture's
 stream hears them, with no Accessibility read or settings write on that path.
 The press does not end the watch, because it may be a chord such as
 Option–Left on the way to the word being fixed. The watch ends once the
-capture is real, and saves the terms on its own thread.
+capture is real, and saves the terms on its own thread. All the presses of
+one watch add at most 5 terms in memory, and when a watch ends the
+in-memory vocabulary is rebuilt from the saved one, so a term heard on a
+press but never saved (a correction reverted, the lab turned off) does not
+linger.
 
 ```ts
 Watch ends
@@ -578,8 +582,9 @@ Watch ends
                                         start, all capitals, mixed case, letters with digits),
                                         adjacent ones joined as a phrase of up to 3 words and
                                         split at punctuation, spaced punctuation (" – ")
-                                        included; at most 5 per edit, each at most 64
-                                        characters, none already in the vocabulary (any case)
+                                        included; at most 5 per edit, counted after skipping
+                                        any already in the vocabulary as saved (any case),
+                                        each at most 64 characters
 ```
 
 A side of the dictation with only whitespace next to it (a paste at the end
@@ -597,10 +602,13 @@ removed, and the 500-entry cap holds. A save that added something says so on
 the live text plate beside the HUD for 6 s ("Added Raunak to Vocabulary",
 or "Added 3 terms to Vocabulary"), with an Undo, the plate's one click
 region; it never takes focus, live words take the plate back from it, and a
-new capture or the lab turning off dismisses it. Undo removes, in the same
-locked `AppSettings::edit`, only the entries this save added that are still
-exactly as added; one edited or removed since is left alone
-(`corrections::Learned::undo`). No model or network is involved, and
+new capture or the lab turning off, from the card or `hex settings set`,
+dismisses it. Undo removes, in the same locked `AppSettings::edit`, the
+entries this save added, but only if the saved vocabulary is still exactly as
+this save left it; any vocabulary edit in between (a respelling, a removal, a
+term removed and added again, an unrelated term) makes Undo a no-op, and so
+does the lab being off (`corrections::Learned::undo`). For a 6 s notice this
+is the simplest rule that never removes an entry the user made. No model or network is involved, and
 the text is never logged: only the outcome and the count of terms added. Off,
 nothing reads Accessibility and no thread starts. Windows and Linux have no
 Accessibility text reader, so the lab is macOS only. Checks:
@@ -611,7 +619,8 @@ the word limit, dedupe against the vocabulary and within an edit, the anchor
 by caret and by a single match, open ends, the edited region),
 `dictation::corrections::watch::tests` (a scripted field: saving at the end,
 leaving the app, the lab turning off, YOLO's Return, the next dictation, a
-chord press that keeps the watch),
+chord press that keeps the watch, the in-memory cap across presses, a
+reverted correction leaving nothing in memory),
 `a_learned_vocabulary_edit_keeps_vocabulary_edits_saved_since_learning_began`
 in `app_settings::persistence::tests`, and
 `learn_from_corrections_is_its_own_switch_and_macos_only` in

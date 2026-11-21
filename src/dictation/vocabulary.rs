@@ -405,6 +405,25 @@ pub(crate) fn add_unsaved(terms: &[String]) {
     let _ = crate::dictation::corrections::add_learned(&mut saved, terms);
 }
 
+/// Puts the applied entries back to the vocabulary as saved, dropping any
+/// [`add_unsaved`] added that were never saved. Leaves them as they are
+/// when the settings can't be read.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn drop_unsaved() {
+    let read = crate::app_paths::support_dir()
+        .map_err(|error| error.to_string())
+        .and_then(|root| read_from(&root.join("settings.json")));
+    match read {
+        Ok(entries) => {
+            *SAVED
+                .get_or_init(Default::default)
+                .write()
+                .unwrap_or_else(|error| error.into_inner()) = entries;
+        }
+        Err(error) => tracing::warn!(%error, "could not reread the vocabulary"),
+    }
+}
+
 /// The entries saved in `root/settings.json`, read without loading
 /// `AppSettings` (which migrates and writes), for read-only commands. Empty
 /// when the file is missing or unreadable.
